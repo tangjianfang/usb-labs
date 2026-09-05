@@ -1,5 +1,5 @@
 name: lab3-msc 产测（空白盘产线专用）
-device: {backend: msc, vid: 0x2341, pid: 0x0003}
+device: {backend: msc, vid: 0xCAFE, pid: 0x4002}  # 与 firmware/src/usb_descriptors.c 一致
 steps:
   - {type: msc_inquiry, name: INQUIRY}
   - {type: msc_capacity, name: 容量核对, limits: {min_gb: 0.9}}

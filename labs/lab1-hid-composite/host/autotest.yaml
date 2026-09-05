@@ -1,5 +1,5 @@
 name: lab1-hid 复合设备产测
-device: {backend: hid, vid: 0x2341, pid: 0x0001, name_prefix: "USB-Labs"}
+device: {backend: hid, vid: 0x1234, pid: 0x0002, name_prefix: "USB-Labs"}  # 与 firmware/src/usb_descriptors.h 一致（演示占位 VID/PID，量产须更换）
 steps:
   - {type: enumerate, name: 枚举检测}
   - {type: descriptor_check, name: 描述符合规}

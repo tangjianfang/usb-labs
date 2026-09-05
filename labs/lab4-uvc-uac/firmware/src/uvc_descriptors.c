@@ -26,10 +26,10 @@ static const uint8_t dev_desc[18] = {
     64,                     /* EP0 最大包 */
     VID_USB_LABS & 0xFF, VID_USB_LABS >> 8,
     PID_UVC_UAC_LAB4 & 0xFF, PID_UVC_UAC_LAB4 >> 8,
-    0x00, 0x0100,           /* bcdDevice */
+    0x00, 0x01,             /* bcdDevice */
     1, 2, 0,                /* iManufacturer / iProduct / iSerial */
-    1,                      /* bNumConfigurations（FS 与 HS 用 bcdUSB2.0 单配置+端点由速度区分，
-                               亦可为 FS/HS 各建一套配置，本骨架按后者思路给两套数组）*/
+    1,                      /* bNumConfigurations：FS/HS 各备一套配置数组，主机读哪套
+                               取决于当前速度（Device Qualifier 描述符声明另一速度的能力）*/
 };
 
 /* ---------------- 配置描述符（教学：仅 UVC 段；UAC 段见另一文件） ----------------
@@ -53,7 +53,7 @@ static const uint8_t cfg_uvc_fs[UVC_CFG_TOTAL_LEN] = {
     13, 0x24, 0x01,
     0x10, 0x01,             /* bcdUVC 1.10 */
     53, 0x00,               /* wTotalLength */
-    0x00, 0x19, 0x9A, 0x01, /* dwClockFrequency = 27000000（常见 27MHz 时基；须与固件 SCR 一致）*/
+    0xC0, 0xFC, 0x9B, 0x01, /* dwClockFrequency = 27000000（常见 27MHz 时基；须与固件 SCR 一致）*/
     1, 1,                   /* bInCollection=1, baInterfaceNr[0]=1 (VS 接口号) */
     /* 输入终端 IT1：Camera Terminal（类型 0x0201），支持自动/手动曝光控制 */
     18, 0x24, 0x02, 1,
@@ -112,8 +112,8 @@ static const uint8_t cfg_uvc_fs[UVC_CFG_TOTAL_LEN] = {
     0x00,
     0x80, 0x02,             /* 640 */
     0xE0, 0x01,             /* 480 */
-    0x00, 0x5D, 0x0F, 0x00, /* dwMinBitRate = 1,000,000 */
-    0x00, 0x84, 0x03, 0x00, /* dwMaxBitRate = 6,000,000 */
+    0x40, 0x42, 0x0F, 0x00, /* dwMinBitRate = 1,000,000 */
+    0x80, 0x8D, 0x5B, 0x00, /* dwMaxBitRate = 6,000,000 */
     0x00, 0x77, 0x01, 0x00, /* dwMaxVideoFrameBufferSize = 96000 */
     0x15, 0x16, 0x05, 0x00,
     1,

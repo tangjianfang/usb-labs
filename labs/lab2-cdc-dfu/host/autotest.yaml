@@ -1,5 +1,5 @@
 name: lab2-cdc-dfu 产测
-device: {backend: cdc, port: "COM7", vid: 0x2341, pid: 0x0002, baud: 115200}
+device: {backend: cdc, port: "COM7", vid: 0xCAFE, pid: 0x4010, baud: 115200}  # 与 firmware/src/usb_descriptors.c 一致
 steps:
   - {type: enumerate, name: 枚举检测}
   - {type: line_coding, name: 线路编码往返}
