@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="app">
+      <UniqueIdentifier>{a1b2c3d4-0001-4e5f-8a9b-c0d1e2f3a4b5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="framework">
+      <UniqueIdentifier>{a1b2c3d4-0002-4e5f-8a9b-c0d1e2f3a4b5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="usb">
+      <UniqueIdentifier>{a1b2c3d4-0003-4e5f-8a9b-c0d1e2f3a4b5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="engine">
+      <UniqueIdentifier>{a1b2c3d4-0004-4e5f-8a9b-c0d1e2f3a4b5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ui">
+      <UniqueIdentifier>{a1b2c3d4-0005-4e5f-8a9b-c0d1e2f3a4b5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\app\main.cpp"><Filter>app</Filter></ClCompile>
+    <ClCompile Include="src\framework\win32_rai.cpp"><Filter>framework</Filter></ClCompile>
+    <ClCompile Include="src\framework\json_mini.cpp"><Filter>framework</Filter></ClCompile>
+    <ClCompile Include="src\usb\device_enumerator.cpp"><Filter>usb</Filter></ClCompile>
+    <ClCompile Include="src\usb\hid_port.cpp"><Filter>usb</Filter></ClCompile>
+    <ClCompile Include="src\usb\serial_port.cpp"><Filter>usb</Filter></ClCompile>
+    <ClCompile Include="src\usb\msc_scsi.cpp"><Filter>usb</Filter></ClCompile>
+    <ClCompile Include="src\engine\test_engine.cpp"><Filter>engine</Filter></ClCompile>
+    <ClCompile Include="src\ui\log_view.cpp"><Filter>ui</Filter></ClCompile>
+    <ClCompile Include="src\ui\main_window.cpp"><Filter>ui</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\framework\win32_rai.h"><Filter>framework</Filter></ClInclude>
+    <ClInclude Include="src\framework\json_mini.h"><Filter>framework</Filter></ClInclude>
+    <ClInclude Include="src\usb\device_enumerator.h"><Filter>usb</Filter></ClInclude>
+    <ClInclude Include="src\usb\hid_port.h"><Filter>usb</Filter></ClInclude>
+    <ClInclude Include="src\usb\serial_port.h"><Filter>usb</Filter></ClInclude>
+    <ClInclude Include="src\usb\msc_scsi.h"><Filter>usb</Filter></ClInclude>
+    <ClInclude Include="src\engine\test_engine.h"><Filter>engine</Filter></ClInclude>
+    <ClInclude Include="src\ui\log_view.h"><Filter>ui</Filter></ClInclude>
+    <ClInclude Include="src\ui\main_window.h"><Filter>ui</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="app.manifest" />
+    <None Include="plans\sample_plan.json" />
+    <None Include="README.md" />
+  </ItemGroup>
+</Project>

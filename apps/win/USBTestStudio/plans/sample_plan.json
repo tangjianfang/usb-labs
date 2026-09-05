@@ -1,0 +1,47 @@
+{
+  "name": "usb_prod_sample",
+  "station": "STN-01",
+  "dut_sn": "AUTO",
+  "device": {
+    "vid": "0x1234",
+    "pid": "0x5678",
+    "port": "COM7",
+    "telemetry_port": "COM8",
+    "baud": 115200,
+    "drive": -1
+  },
+  "steps": [
+    {
+      "type": "enumerate",
+      "name": "枚举检测"
+    },
+    {
+      "type": "hid_polling_rate",
+      "name": "回报率",
+      "seconds": 3,
+      "limits": { "min_hz": 900 }
+    },
+    {
+      "type": "serial_loopback",
+      "name": "串口环回",
+      "repeat": 4
+    },
+    {
+      "type": "msc_capacity",
+      "name": "容量",
+      "limits": { "min_gb": 0 }
+    },
+    {
+      "type": "msc_read_verify",
+      "name": "只读校验",
+      "lba": 0,
+      "blocks": 64,
+      "loops": 8
+    },
+    {
+      "type": "pd_attach",
+      "name": "CC attach",
+      "window_ms": 2000
+    }
+  ]
+}

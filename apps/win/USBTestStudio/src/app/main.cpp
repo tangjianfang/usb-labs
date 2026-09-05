@@ -1,0 +1,72 @@
+// main.cpp — wWinMain 入口：InitCommonControlsEx、加载 Msftedit.dll、
+// 命令行解析、消息循环与退出码。未真机编译，按 MSDN 口径编写。
+#include "ui/main_window.h"
+
+#include <commctrl.h>
+#include <shellapi.h>
+
+#include <cwchar>
+
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "shell32.lib")
+
+namespace {
+
+struct AppArgs {
+    std::wstring plan_path;   // 默认 exe 同目录 plan.json
+    std::wstring dut_sn = L"AUTO";
+    std::wstring station;
+    bool auto_exit = false;
+};
+
+AppArgs parse_command_line() {
+    AppArgs a;
+    int argc = 0;
+    LPWSTR* argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
+    if (!argv) return a;
+    for (int i = 1; i < argc; ++i) {
+        const wchar_t* arg = argv[i];
+        if (::wcscmp(arg, L"--auto") == 0) {
+            a.auto_exit = true;                        // 完成后自动退出（产线模式，退出码进 MES）
+        } else if (::wcscmp(arg, L"--plan") == 0 && i + 1 < argc) {
+            a.plan_path = argv[++i];
+        } else if (::wcscmp(arg, L"--dut-sn") == 0 && i + 1 < argc) {
+            a.dut_sn = argv[++i];
+        } else if (::wcscmp(arg, L"--station") == 0 && i + 1 < argc) {
+            a.station = argv[++i];
+        } else if (arg[0] != L'-') {
+            a.plan_path = arg;                         // 位置参数 = 计划路径
+        }
+    }
+    ::LocalFree(argv);
+    return a;
+}
+
+} // namespace
+
+int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
+    ::HeapSetInformation(nullptr, HeapEnableTerminationOnCorruption, nullptr, 0);
+
+    INITCOMMONCONTROLSEX icc{};
+    icc.dwSize = sizeof(icc);
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
+    if (!::InitCommonControlsEx(&icc)) return static_cast<int>(ExitCode::PlanError);
+
+    // RICHEDIT50W 窗口类在 Msftedit.dll 中，须先加载
+    ::LoadLibraryW(L"Msftedit.dll");
+
+    AppArgs args = parse_command_line();
+    if (args.plan_path.empty()) args.plan_path = wraii::exe_dir() + L"\\plan.json";
+    if (args.station.empty()) args.station = L"STN-01";   // 与 tools/usbtest DEFAULT_STATION 一致
+
+    if (!MainWindow::register_class(hInstance))
+        return static_cast<int>(ExitCode::PlanError);
+
+    MainWindow* win = MainWindow::create(hInstance, nCmdShow, args.plan_path, args.dut_sn,
+                                         args.station, args.auto_exit);
+    if (!win) return static_cast<int>(ExitCode::PlanError);
+
+    int code = win->run();
+    delete win;
+    return code;
+}
