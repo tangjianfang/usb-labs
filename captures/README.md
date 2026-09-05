@@ -7,7 +7,8 @@
 > 文中字节满足两条纪律：
 > 1. 结构性字段（PID、请求、描述符、CBW/CSW、Sense、PD Header/PDO/RDO）严格按官方规范取值；
 > 2. CRC5/CRC16 按规范算法（USB 2.0 §8.3.5：移位寄存器全 1 种子、余数取反、MSb 先发）对文中负载**实算**得出，
->    生成脚本见 [`tools/_usbcalc.py`](../tools/_usbcalc.py)（内嵌规范余数校验 01100B / 1000000000001101B 与 CRC-16/USB 目录校验值 0xB4C8 双重断言）。
+>    生成脚本见 [`tools/_usbcalc.py`](../tools/_usbcalc.py)（内嵌规范余数校验 01100B / 1000000000001101B 与 CRC-16/USB 目录校验值 0xB4C8 双重断言），
+>    [`tools/_verify_captures.py`](../tools/_verify_captures.py) 可自动复核各 md 中全部包字节。
 > 设备身份（VID/PID、字符串）、采样数据、帧号、电流电压档位等**内容性**字节均标注为"示意值"。
 
 ## 真实抓包怎么来？三条路

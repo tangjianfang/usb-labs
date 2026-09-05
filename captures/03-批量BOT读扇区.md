@@ -23,7 +23,7 @@ EP1 OUT = 命令/写数据，EP1 IN = 读数据/状态。多字节字段坑位�
 ### 2.1 ① CBW（批量 OUT，DATA0）
 
 ```text
-[SYNC] E1 85 60      ; OUT 令牌: ADDR=8, ENDP=1（字节为示意地址下的实算值）
+[SYNC] E1 88 D0      ; OUT 令牌: ADDR=8, ENDP=1（示意地址下的实算值）
 [SYNC] C3 55 53 42 43 01 00 00 00 00 02 00 00 80 00 0A
          28 00 00 00 03 E8 00 00 01 00 00 00 00 00 00 00
          42 C1
@@ -58,9 +58,9 @@ CBWCB = READ(10) 命令（10 字节有效）：
 ### 2.2 ② 数据阶段：512 字节扇区（批量 IN，DATA0）
 
 ```text
-[SYNC] 69 85 60      ; IN 令牌（可能先吃几轮 NAK: 设备读闪存要时间）
+[SYNC] 69 88 D0      ; IN 令牌（可能先吃几轮 NAK: 设备读闪存要时间）
 [SYNC] C3 EB 52 90 4D 53 44 4F 53 35 2E 30 00 02 08 20 00
-         (其后 496 字节 …)                    7B 83
+         (… 其后 496 字节全为 00 …)           7B 83
        │  └── 512 字节扇区数据（示意值: FAT32 引导扇区样式的开头）──┘ └ CRC16(实算)
        └ DATA0 —— 该 IN 端点的第一包, toggle 从 DATA0 起步
 [SYNC] D2
@@ -73,7 +73,7 @@ CBWCB = READ(10) 命令（10 字节有效）：
 ### 2.3 ③ CSW（批量 IN，DATA1 —— toggle 接着数据阶段翻转）
 
 ```text
-[SYNC] 69 85 60
+[SYNC] 69 88 D0
 [SYNC] 4B 55 53 42 53 01 00 00 00 00 00 00 00 00 54 22
        │  │  ──┬── ────┬──── ─┬─
        │  │    │       │      └ bCSWStatus = 0x00 命令成功
@@ -94,20 +94,20 @@ CBWCB = READ(10) 命令（10 字节有效）：
 ### 3.1 第一条命令：READ(10)，Tag=1
 
 ```text
-[SYNC] E1 85 60
+[SYNC] E1 88 D0
 [SYNC] C3 55 53 42 43 01 00 00 00 00 02 00 00 80 00 0A
          28 00 0F FF FF FF 00 00 01 00 00 00 00 00 00 00   ; LBA=0x0FFFFFFF(大端)
          04 95                                             ; CRC16(实算)
 [SYNC] D2            ; CBW 被正常接收 —— 错误在"执行", 不在"接收"
 
-[SYNC] 69 85 60
+[SYNC] 69 88 D0
 [SYNC] 1E            ; 设备 STALL: 拒绝数据阶段（LBA 越界, 无数据可给）
 ```
 
 ### 3.2 主机恢复动作 1：清除 IN 端点挂起
 
 ```text
-[SYNC] 2D 05 D0      ; 控制传输（EP0）—— 这一次抓包视角切到端点 0
+[SYNC] 2D 08 60      ; 控制传输（U 盘 EP0, ADDR=8）—— 视角切到端点 0
 [SYNC] C3 02 01 00 00 81 00 00 00 06 D1
          │  │  │     ─┬─
          │  │  │      └ wIndex = 0x0081 → 目标端点 EP1 IN
@@ -115,7 +115,7 @@ CBWCB = READ(10) 命令（10 字节有效）：
          │  └ CLEAR_FEATURE (0x01)
          └ bmRequestType = 0x02: OUT/标准/端点(00010)
 [SYNC] D2
-[SYNC] 69 05 D0      ; 状态阶段: IN
+[SYNC] 69 08 60      ; 状态阶段: IN
 [SYNC] 4B 00 00      ; DATA1 ZLP
 [SYNC] D2
 ```
@@ -126,7 +126,7 @@ CBWCB = READ(10) 命令（10 字节有效）：
 ### 3.3 主机恢复动作 2：读 CSW（Status=01）
 
 ```text
-[SYNC] 69 85 60
+[SYNC] 69 88 D0
 [SYNC] C3 55 53 42 53 01 00 00 00 00 00 00 00 01 95 E2
        │  ──┬── ────┬──── ─┬─
        │    │       │      └ bCSWStatus = 0x01 命令失败 → 去 REQUEST SENSE
@@ -139,7 +139,7 @@ CBWCB = READ(10) 命令（10 字节有效）：
 ### 3.4 第二条命令：REQUEST SENSE，Tag=2（错误详情）
 
 ```text
-[SYNC] E1 85 60
+[SYNC] E1 88 D0
 [SYNC] C3 55 53 42 43 02 00 00 00 12 00 00 00 80 00 06
          03 00 00 00 12 00 00 00 00 00 00 00 00 00 00 00
          AF 15
@@ -147,7 +147,7 @@ CBWCB = READ(10) 命令（10 字节有效）：
          └ Tag=2, dCBWDataTransferLength=0x12=18, bmCBWFlags=0x80(IN)
 [SYNC] D2
 
-[SYNC] 69 85 60
+[SYNC] 69 88 D0
 [SYNC] 4B 70 00 05 00 00 00 00 0A 00 00 00 00 21 00 00 00 00 00 70 FA
        │  └────── 18 字节 Sense 数据 ──────────────────────┘ └ CRC16(实算)
        └ DATA1（CSW 用了 DATA0, toggle 正常翻到 DATA1）
@@ -171,7 +171,7 @@ CBWCB = READ(10) 命令（10 字节有效）：
 > Sense 数据被 REQUEST SENSE 取走后 Check Condition 自清——不取回会被下一条命令覆盖。
 
 ```text
-[SYNC] 69 85 60
+[SYNC] 69 88 D0
 [SYNC] C3 55 53 42 53 02 00 00 00 00 00 00 00 00 40 D2
                                               ─┬─
                                                └ Status=0x00（取 Sense 这条本身成功）
