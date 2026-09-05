@@ -1,0 +1,8 @@
+name: lab1-hid 复合设备产测
+device: {backend: hid, vid: 0x2341, pid: 0x0001, name_prefix: "USB-Labs"}
+steps:
+  - {type: enumerate, name: 枚举检测}
+  - {type: descriptor_check, name: 描述符合规}
+  - {type: hid_polling_rate, name: 回报率测量, seconds: 2, limits: {min_hz: 900}}
+  - {type: hid_output_write, name: LED 点亮, report: [0x21, 0x00]}
+  - {type: hid_report_loopback, name: 工装环回, pattern: [0x55, 0xAA], timeout_ms: 500}

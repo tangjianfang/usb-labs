@@ -1,0 +1,9 @@
+# 基础（mock 模式零依赖，仅 pyyaml）
+pyyaml>=6
+# 按协议选装
+pyserial>=3.5      # CDC / PD 遥测
+pyusb>=1.2         # HID 描述符/CDC 类请求/MSC BOT/UVC 描述符
+hidapi>=0.14       # HID 报告/回报率
+bleak>=0.21        # BLE 扫描/连接/通知
+opencv-python>=4.8 # UVC 帧采集（可选）
+pyvisa>=1.13       # PD 产线 SCPI 仪器（可选）

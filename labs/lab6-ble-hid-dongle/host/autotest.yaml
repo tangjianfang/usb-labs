@@ -1,0 +1,6 @@
+name: lab6-ble 双模键鼠产测
+device: {backend: ble, name_prefix: "USB-Labs Mouse"}
+steps:
+  - {type: ble_scan_connect, name: BLE 连接, timeout_s: 10}
+  - {type: ble_gatt_discover, name: HOGP 服务发现, service: "0x1812"}
+  - {type: ble_hid_notify, name: HID 通知, count: 3, timeout_s: 15}

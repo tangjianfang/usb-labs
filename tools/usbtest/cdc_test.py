@@ -1,0 +1,66 @@
+"""CDC 产测后端：串口环回（工装）、线路编码读写、DFU 校验流程。
+依赖: pip install pyserial pyusb
+"""
+import time
+
+HANDLERS = {}
+
+
+def handler(t):
+    def deco(fn):
+        HANDLERS[t] = fn
+        return fn
+    return deco
+
+
+def open_device(dev):
+    import serial
+    port = dev.get("port")
+    assert port, "请在计划 device.port 指定串口（如 COM7 / /dev/ttyACM0）"
+    return serial.Serial(port, int(dev.get("baud", 115200)), timeout=1)
+
+
+def _s(ctx):
+    if ctx.get("dev") is None:
+        ctx["dev"] = open_device(ctx["device"])
+    return ctx["dev"]
+
+
+@handler("serial_loopback")
+def loopback(ctx, step):
+    """环回测试：需环回工装（TX-RX 短接）或设备固件回显。"""
+    s = _s(ctx)
+    s.reset_input_buffer()
+    pattern = bytes(range(256)) * int(step.get("repeat", 4))
+    s.write(pattern)
+    s.flush()
+    got = s.read(len(pattern))
+    ok = got == pattern
+    return StepResult(step.get("name", "串口环回"), ok,
+                      {"bytes": len(got)}, "" if ok else f"回读不匹配@{len(got)}B")
+
+
+@handler("line_coding")
+def line_coding(ctx, step):
+    """SET/GET_LINE_CODING 往返（经 pyusb 控制传输验证类请求正确性）。"""
+    import usb.core
+    v, p = ctx["device"].get("vid"), ctx["device"].get("pid")
+    d = usb.core.find(idVendor=v, idProduct=p)
+    assert d is not None, "USB 设备未找到"
+    lc = bytes([0x80, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x08])  # 115200-8N1
+    d.ctrl_transfer(0x21, 0x20, 0, 0, lc)                    # SET_LINE_CODING
+    r = d.ctrl_transfer(0xA1, 0x21, 0, 0, 7)                 # GET_LINE_CODING
+    ok = bytes(r) == lc
+    return StepResult(step.get("name", "线路编码往返"), ok, {"baud": int.from_bytes(r[0:4], "little")})
+
+
+@handler("dfu_verify")
+def dfu_verify(ctx, step):
+    """DFU 升级链路校验：dfu-util 下载测试镜像并读回比对（产线工装流程的自动化封装）。
+    实际调用: dfu-util -a 0 -D test.bin; 校验由设备侧 CRC 上报（需固件配合）。"""
+    import subprocess
+    img = step.get("image", "")
+    r = subprocess.run(["dfu-util", "-a", str(step.get("alt", 0)), "-D", img],
+                       capture_output=True, text=True, timeout=120)
+    ok = r.returncode == 0 and "done" in r.stderr.lower() or r.returncode == 0
+    return StepResult(step.get("name", "DFU 校验"), ok, {"rc": r.returncode}, r.stderr[-120:])

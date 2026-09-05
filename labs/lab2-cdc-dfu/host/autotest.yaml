@@ -1,0 +1,7 @@
+name: lab2-cdc-dfu 产测
+device: {backend: cdc, port: "COM7", vid: 0x2341, pid: 0x0002, baud: 115200}
+steps:
+  - {type: enumerate, name: 枚举检测}
+  - {type: line_coding, name: 线路编码往返}
+  - {type: serial_loopback, name: 串口环回, repeat: 4}
+  - {type: dfu_verify, name: DFU 升级校验, image: firmware/test_image.bin, alt: 0}

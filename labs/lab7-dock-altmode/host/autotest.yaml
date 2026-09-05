@@ -1,0 +1,5 @@
+name: lab7-dock 产测
+device: {backend: dock}
+steps:
+  - {type: dock_topology, name: 拓扑核对, limits: {min_hs_ports: 2}}
+  - {type: hub_port_cycle, name: 插拔循环, loops: 5, expect_id: "2341", limits: {min_rate: 100}}

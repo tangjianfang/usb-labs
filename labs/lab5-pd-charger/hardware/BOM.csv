@@ -1,0 +1,18 @@
+序号,功能模块,Sink 示例器件,Sink 数量,Sink 参考单价(元),Source 示例器件,Source 数量,Source 参考单价(元),选型备注（详见 设计要点.md）
+1,PD/Type-C 控制器（路线A 免固件）,CH224K（或 CH224M/HUSB238/STUSB4500）,1,2~20,英集芯 IP2721 / 智融 SW2303 / 南芯 SC2001 类 Source 协议芯片,1,1.5~4,Sink 只收不发请求策略固定；Source 芯片需支持 Source 角色+广播 PDO 配置
+2,PD/Type-C 控制器（路线B TCPM）,FUSB302 或 HUSB311（TCPC PHY）,1,2~8,CCGx（Infineon）或 TI 端口控制器（或同 Sink 的 TCPC+协议芯片组合）,1,3~30,路线B 需配 MCU 跑 PE；Source 建议直接用带固件 SDK 的端口控制器
+3,MCU（路线B 必配；路线A 可省）,STM32G0 / RP2040 / ESP32-C3 任意带 I2C+INT,1,3~15,同左（若用带固件协议芯片可省）,0~1,3~15,跑 pe_sink.c 骨架只需 Cortex-M0+ 级；预留 UART 日志口
+4,VBUS 输入开关 MOSFET（Sink 防倒灌/隔离）,30~40V N-MOSFET RdsOn≤30mΩ（SOIC-8/DFN3x3）背靠背×2,2,0.3~1.2,—,0,0,SPR 20V 契约按耐压≥30V 选；做 EPR（28/36/48V）换 ≥60~100V 管
+5,VBUS 输出开关 MOSFET（Source）,—,0,0,25~40V N-MOSFET RdsOn≤20mΩ 背靠背×2（带放电管或选集成方案）,2,0.3~1.2,断开时限（tVBUSOFF 类）与放电时序要求见 Type-C 规范 Table 4-32
+6,栅极驱动/负载开关控制器,热插拔/负载开关 IC（或协议芯片直驱）,1,1~5,集成于协议芯片或独立 eFuse IC,1,1~6,要求带过流关断+过温；开尔文采样口预留
+7,VBUS 电流采样,并联检流电阻 5~10mΩ±1% + 电流监控 I2C IC,1+1,0.5~4,2~5mΩ±1% 功率电阻 + INA 类电流监控 IC,1+1,0.8~5,Source 侧为 OCP 双通道之一（硬件比较+软件轮询）；注意开尔文接法
+8,VBUS 放电电路,功率电阻+N-MOS（或集成于负载开关）,1,0.2~1,放电电阻+N-MOS（按 tBulkDischarge 类时限核算功率）,1,0.5~2,Sink 侧断开放电为可选项；Source 侧断开必须快速放到 vSafe0V 级别
+9,VCONN 供电,LDO（输出按 E-marker 规格窗）+ 供电 MOSFET,1+1,0.5~2,LDO + 供电 MOSFET（支持 VCONN_Swap 则需双路/切换）,1+1,0.5~2,仅当该端口需给 5A E-marker 线供电时必须；Sink 通常可省
+10,CC/SBU ESD 阵列,低电容（≤1pF）ESD 保护阵列,1~2,0.2~0.6,低电容（≤1pF）ESD 保护阵列,1~2,0.2~0.6,CC 上不得加会破坏 BMC 波形的大电容；选系统级 ESD 等级器件
+11,VBUS 入口 TVS,低钳位 TVS（VBUS 线）,1,0.3~1,低钳位 TVS（VBUS 线）,1,0.3~1,Sink 防 Source 异常高压；Source 防雷击浪涌等级按安规定
+12,后级 DC-DC（Sink）,宽压同步降压（4.5~24V 输入→3.3V/5V 或电池充电 IC）,1,2~15,—,0,0,电动工具/路由器按负载另定；注意最低占空比与 20V 输入裕量
+13,一次侧 AC-DC（Source 充电头）,—,0,0,保险丝+整流+反激控制器（PSR/SSR）+GaN/硅功率管+变压器+同步整流,1套,10~40,强电部分只做方向性了解；认证与安规是主要成本
+14,次级反馈（Source）,—,0,0,光耦+TL431（SSR）或协议芯片集成反馈（PSR）,1,0.5~2,输出电压随 PDO 切换由协议芯片调节反馈基准
+15,Type-C 母座,16pin 板上母座（含 CC/SBU；5A 选大电流端子）,1,0.3~1.5,16pin 全功能母座（VCONN/SBU 全接）,1,0.3~1.5,Sink 若只取电可砍 SuperSpeed 差分对；Source 做 EPR 需确认端子耐压/温升
+16,辅助器件（采样分压/NTC/LED/去耦）,—,—,0.5~2,—,—,0.5~2,VBUS 分压采样电阻精度直接影响 OVP 阈值；NTC 贴 MOSFET/变压器
+,合计参考,,,,,,,Sink 板合计约 15~60 元；Source 概念板合计约 25~90 元（不含一次侧强电与认证）；区间估算，量产价随用量大幅下降，以实时渠道为准

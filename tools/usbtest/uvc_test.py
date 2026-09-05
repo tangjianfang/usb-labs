@@ -1,0 +1,65 @@
+"""UVC 产测后端：格式/描述符核对（pyusb）+ 可选帧采集（OpenCV）。
+依赖: pip install pyusb；帧采集另需 opencv-python（可选）。
+"""
+HANDLERS = {}
+
+
+def handler(t):
+    def deco(fn):
+        HANDLERS[t] = fn
+        return fn
+    return deco
+
+
+def open_device(dev):
+    import usb.core
+    d = usb.core.find(idVendor=dev.get("vid"), idProduct=dev.get("pid"))
+    assert d is not None, "未发现 UVC 设备"
+    d.set_configuration()
+    return d
+
+
+def _uvc_formats(d):
+    """从配置描述符扫描 VS 接口的格式线索（简化产测口径：枚举可用分辨率交给 OS 管线）。
+    权威做法是解析 VS 描述符的格式/帧描述符——产线通常以 OS 枚举结果比对白名单。"""
+    found = {"uvc_itf": 0}
+    for cfg in d:
+        for itf in cfg:
+            if itf.bInterfaceClass == 0x0E:
+                found["uvc_itf"] += 1
+    return found
+
+
+@handler("uvc_formats")
+def formats(ctx, step):
+    d = open_device(ctx["device"])
+    f = _uvc_formats(d)
+    need = int((step.get("limits") or {}).get("min_uvc_itf", 1))
+    return StepResult(step.get("name", "UVC 格式"), f["uvc_itf"] >= need,
+                      f, "" if f["uvc_itf"] >= need else "VC/VS 接口缺失")
+
+
+@handler("uvc_capture_frames")
+def capture(ctx, step):
+    """经 OS 管线采集 N 帧（依赖 opencv-python；设备索引来自计划）。"""
+    try:
+        import cv2
+    except ImportError:
+        return StepResult(step.get("name", "帧采集"), False, note="缺 opencv-python（可选依赖）")
+    idx = int(ctx["device"].get("camera_index", 0))
+    cap = cv2.VideoCapture(idx)
+    if not cap.isOpened():
+        return StepResult(step.get("name", "帧采集"), False, note="摄像头打开失败")
+    want = int(step.get("frames", 30))
+    got, w, h = 0, 0, 0
+    for _ in range(want * 3):
+        ok, frame = cap.read()
+        if ok:
+            got += 1
+            h, w = frame.shape[:2]
+        if got >= want:
+            break
+    cap.release()
+    min_frames = int((step.get("limits") or {}).get("min_frames", want))
+    return StepResult(step.get("name", "帧采集"), got >= min_frames,
+                      {"frames": got, "size": f"{w}x{h}"})

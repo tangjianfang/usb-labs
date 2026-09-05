@@ -1,0 +1,7 @@
+name: lab5-pd 产测
+device: {backend: pd, telemetry_port: "COM8", baud: 115200}
+steps:
+  - {type: pd_attach, name: CC attach}
+  - {type: pd_negotiate, name: 5V 合同, expect_v: 5, tol_v: 0.5}
+  - {type: pd_negotiate, name: 9V 合同, expect_v: 9, tol_v: 0.5, command: "req 9"}
+  - {type: measure_voltage, name: VBUS 实测, expect_v: 9, tol_v: 0.25}
