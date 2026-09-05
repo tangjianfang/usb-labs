@@ -27,6 +27,10 @@ cd usb-labs/labs/lab1-hid-composite
 cat README.md            # 从选型到量产的全栈路线
 ```
 
+## 🔬 协议仿真器
+
+[usbsim](simulator/README.md) —— 在纯软件中模拟 USB/BLE/PD 的**协议通信链路**：虚拟主机↔虚拟设备、包真编解码（CRC 实算）、枚举/BOT/PD 协商全状态机、错误注入、抓包流导出。运行 `python simulator/tests/test_sim.py` 全绿。
+
 ## 全栈方法论
 
 [docs/00-全栈方法论.md](docs/00-全栈方法论.md) 定义了贯穿所有实验室的六阶段节奏：

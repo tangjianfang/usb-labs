@@ -23,5 +23,7 @@ jobs:
             python -m usbtest --plan "$plan" --mock --report-dir /tmp/reports || fail=1
           done
           exit $fail
+      - name: usbsim 协议仿真器自测
+        run: python simulator/tests/test_sim.py
       - name: 轻量校验（链接/围栏）
         run: bash tools/validate.sh
