@@ -155,8 +155,8 @@ print("SECTOR512     DATA0", h(data_bytes(0xC3, bytes(sector))))
 audio = bytearray(192)
 audio[:8] = bytes([0x00,0x10,0x00,0xF0,0x00,0x10,0x00,0xF0])
 print("AUDIO192      DATA0", h(data_bytes(0xC3, bytes(audio))), "<- crc tail 2 bytes")
-fb = lambda v: data_bytes(0x4B, v.to_bytes(3,'little'))
-print("FB 0x0C0000 DATA1", h(fb(0x0C0000)), " 0x0C005E:", h(fb(0x0C005E)), " 0xB0666:", h(fb(0xB0666)), " 0xB0667:", h(fb(0xB0667)))
+fb = lambda v: data_bytes(0xC3, v.to_bytes(3,'little'))  # iso: DATA0, no toggle
+print("FB 0x0C0000 DATA0", h(fb(0x0C0000)), " 0x0C004E:", h(fb(0x0C004E)), " 0xB0666:", h(fb(0xB0666)), " 0xB0667:", h(fb(0xB0667)))
 print("10.14: 48.0 ->", hex(48<<14), " 44.1*2^14 =", 44.1*(1<<14), hex(int(44.1*(1<<14))), " 48*1.0001*2^14 =", 48.0048*(1<<14), hex(int(48.0048*(1<<14))))
 
 def hdr(ndo, mid, prole, rev, drole, mtype, ext=0):
@@ -172,4 +172,4 @@ def fixed_pdo(mv, ma, drp=0, susp=0, uncon=0, comm=0, drd=0, unch=0, peak=0):
 pdos = [fixed_pdo(5000,3000,uncon=1,comm=1,drd=1,unch=1), fixed_pdo(9000,3000), fixed_pdo(12000,3000), fixed_pdo(15000,3000), fixed_pdo(20000,3250)]
 for i,p in enumerate(pdos): print(f"PDO{i} = 0x{p:08X}  {p:032b}")
 rdo = (5<<28)|(0<<27)|(0<<25)|(1<<24)|(1<<23)|(0<<22)|(250<<10)|325
-print("RDO  = 0x%08X  %032b" % (rdo, rdo))
+print(f"RDO  = 0x{rdo:08X}  {rdo:032b}")

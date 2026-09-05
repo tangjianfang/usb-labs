@@ -22,7 +22,7 @@
 | 1 | **ADV_IND**（ch=37） | AdvA=F2:9A:…, Flags(LE General Disc+BR/EDR Not Supported), 名称"LAB6-KB", AD: 0x1812 完整16bitUUID列表, Appearance=Keyboard | 在 37/38/39 三信道轮发；HOGP 设备惯例把 0x1812（HID）放广播数据，便于主机秒筛 |
 | 2 | ADV_IND（ch=38） | 同上 | 跳下一广播信道 |
 | 3 | ADV_IND（ch=39） | 同上 | 主机在此信道收到并决定连接 |
-| 4 | **CONNECT_IND**（C→P，ch=39） | InitA=C, AdvA=P；LLData：**AA**=0x8e89bed6（教学值），CRCInit=0x555555，**WinSize=0x02（1.25ms）**，WinOffset=0x0008，**Interval=0x0018=37.5ms**，Latency=0x0004，Timeout=0x012C（3000ms），ChM=0x1FFFFFFFFF（全37数据信道），**Hop=9**，SCA=5 | 建立连接的核心 PDU：接入地址/跳频增量/信道图/初始时序全部在此一次定死。Latency=4 表示外设可跳过 4 个连接事件打盹 |
+| 4 | **CONNECT_IND**（C→P，ch=39） | InitA=C, AdvA=P；LLData：**AA**=0x8e89bed6（教学值），CRCInit=0x555555，**WinSize=0x02（2.5ms）**，WinOffset=0x0008，**Interval=0x0018=24×1.25ms=30ms**，Latency=0x0004，Timeout=0x012C（3000ms），ChM=0x1FFFFFFFFF（全37数据信道），**Hop=9**，SCA=5 | 建立连接的核心 PDU：接入地址/跳频增量/信道图/初始时序全部在此一次定死。Latency=4 表示外设可跳过 4 个连接事件打盹 |
 
 ## 2. 链路层特性协商（LLCP）
 
@@ -48,7 +48,7 @@
 |---|---|---|---|
 | 11 | **SMP Pairing Request**（P→C，L2CAP CID 0x0006，cmd=0x01） | IOCap=0x03(NoInputNoOutput)，OOB=0，**SC=1**，Bonding=1，MITM=0，MaxKeySize=16，InitKdist/RespKdist：Enc+Id | NoInputNoOutput + MITM=0 ⇒ Just Works；Bonding=1 ⇒ 双方存密钥 |
 | 12 | SMP Pairing Response（C→P，cmd=0x02） | 对称字段，SC=1 | 双方确认走 LE Secure Connections（ECDH P-256） |
-| 13 | Pairing Public Key（0x0C）×2 | PKax/PKax 64 字节×2 | 交换 ECDH 公钥 |
+| 13 | Pairing Public Key（0x0C）×2 | PKax/PKay 各 64 字节 | 交换 ECDH 公钥 |
 | 14 | Pairing Confirm（0x03）×2 | Confirm 值 16B | DHKey Check 前的确认计算 |
 | 15 | Pairing Random（0x04）×2 | Nonce 16B | 同上 |
 | 16 | Pairing DHKey Check（0x0D）×2 | Ea/Eb 16B | 防 MITM 校验（Just Works 下无认证属性） |

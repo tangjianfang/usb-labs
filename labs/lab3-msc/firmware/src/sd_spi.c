@@ -41,9 +41,10 @@ static inline void cs_release(void) {
 static uint32_t now_ms(void) { return to_ms_since_boot(get_absolute_time()); }
 
 /*------------------------- 命令层 -------------------------*/
-/* 发命令并取 R1 响应（bit0..6 状态，bit7=0 表示响应有效）。
+/* 发命令帧并收 R1 响应（bit0..6 状态，bit7=0 表示响应有效）。
+ * 不碰片选 CS：带数据阶段的命令（CMD9/17/24）要求 CS 在命令+数据期间保持低电平。
  * resp 可为 NULL；cmd==8 时会额外回读 4 字节 R7 payload。返回 0xFF 表示超时。 */
-static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t resp[4]) {
+static uint8_t sd_cmd_raw(uint8_t cmd, uint32_t arg, uint8_t resp[4]) {
     uint8_t frame[6] = {
         (uint8_t) (0x40u | cmd),
         (uint8_t) (arg >> 24), (uint8_t) (arg >> 16),
@@ -55,7 +56,6 @@ static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t resp[4]) {
     if (cmd == 8) frame[5] = 0x87;
 
     xfer(0xFF);                                /* 命令前导：至少 1 字节 */
-    cs_low();
     spi_write_blocking(SD_SPI_PORT, frame, sizeof(frame));
 
     /* R1：等待 bit7=0 的字节（最多约 8 字节 Ncr + 余量） */
@@ -70,6 +70,14 @@ static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t resp[4]) {
         resp[2] = xfer(0xFF);
         resp[3] = xfer(0xFF);
     }
+    return r1;
+}
+
+/* 无数据阶段命令的完整封装：CS 低 → 命令 → CS 高 */
+static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t resp[4]) {
+    xfer(0xFF);
+    cs_low();
+    uint8_t r1 = sd_cmd_raw(cmd, arg, resp);
     cs_release();
     return r1;
 }
@@ -163,13 +171,13 @@ bool sd_spi_init(void) {
     /* 8) CMD16：定块长 512（SDHC 固定 512，此命令无害） */
     if (sd_send_cmd(16, SD_BLOCK_SIZE, NULL) > 2) { cs_release(); return false; }
 
-    /* 9) CMD9 读 CSD → 解析容量（对接 tud_msc_capacity_cb 的数据源头） */
+    /* 9) CMD9 读 CSD → 解析容量（对接 tud_msc_capacity_cb 的数据源头）
+     *    命令与数据阶段之间 CS 保持低电平（带数据阶段的命令规范要求） */
     uint8_t csd[16] = {0};
     cs_low();
-    if (sd_send_cmd(9, 0, NULL) != 0x00 || !sd_read_data(0xFE, csd, 16)) {
-        cs_release(); return false;
-    }
+    bool csd_ok = (sd_cmd_raw(9, 0, NULL) == 0x00) && sd_read_data(0xFE, csd, 16);
     cs_release();
+    if (!csd_ok) return false;
 
     if ((csd[0] >> 6) == 0x01) {               /* CSD v2（SDHC/SDXC） */
         uint32_t csize = ((uint32_t) (csd[7] & 0x3F) << 16)
@@ -198,18 +206,17 @@ uint32_t sd_spi_sector_count(void) { return s_ready ? s_sectors : 0; }
 /*------------------------- 块读写 -------------------------*/
 static bool sd_read_one(uint32_t lba, uint8_t *buf) {
     uint32_t addr = s_sdhc ? lba : (lba << 9); /* SDSC 是字节地址 */
-    if (sd_send_cmd(17, addr, NULL) != 0x00) return false;
-    cs_low();
-    bool ok = sd_read_data(0xFE, buf, SD_BLOCK_SIZE);
+    cs_low();                                  /* 命令+数据期间 CS 恒低 */
+    bool ok = (sd_cmd_raw(17, addr, NULL) == 0x00) && sd_read_data(0xFE, buf, SD_BLOCK_SIZE);
     cs_release();
     return ok;
 }
 
 static bool sd_write_one(uint32_t lba, const uint8_t *buf) {
     uint32_t addr = s_sdhc ? lba : (lba << 9);
-    if (sd_send_cmd(24, addr, NULL) != 0x00) return false;
+    cs_low();                                  /* 命令+数据期间 CS 恒低 */
+    if (sd_cmd_raw(24, addr, NULL) != 0x00) { cs_release(); return false; }
 
-    cs_low();
     xfer(0xFF);                                /* Nwr 前导 */
     xfer(0xFE);                                /* 单块写数据令牌 */
     spi_write_blocking(SD_SPI_PORT, buf, SD_BLOCK_SIZE);

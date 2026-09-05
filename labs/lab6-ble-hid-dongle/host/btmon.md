@@ -69,7 +69,7 @@ trust   XX:XX:XX:XX:XX:XX
 ## 4. 常见坑
 
 - Sniffer **加密后失明**：连接加密后若无密钥，链路层数据解不开；nRF Sniffer 支持在 GUI 填入 LTK（从固件日志或配对过程抓取）后解密。
-- 抓不到 CONNECT_IND：-sniffer 启动晚于连接。键盘重连太快时，先清绑定（长按配对键）再抓完整配对流程。
+- 抓不到 CONNECT_IND：Sniffer 启动晚于连接。键盘重连太快时，先清绑定（长按配对键）再抓完整配对流程。
 - `hcitool`/`hciconfig` 已弃用但仍常见于旧资料；新代码用 `bluetoothctl`/`btmgmt`。
 - 抓包文件本身可入库对比：Wireshark wiki 样例库有公开 BLE 样例（https://wiki.wireshark.org/SampleCaptures），可作为"别人家真实抓包"的参照。
 
