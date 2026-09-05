@@ -101,7 +101,7 @@ static const uint8_t cfg_uvc_fs[UVC_CFG_TOTAL_LEN] = {
     0x00, 0x05,             /* wWidth  = 1280 */
     0xD0, 0x02,             /* wHeight = 720 */
     0x80, 0x84, 0x1E, 0x00, /* dwMinBitRate = 2,000,000 */
-    0x00, 0x42, 0xF4, 0x00, /* dwMaxBitRate = 16,000,000（对应 §7 带宽账上限）*/
+    0x00, 0x24, 0xF4, 0x00, /* dwMaxBitRate = 16,000,000（对应 §7 带宽账上限）*/
     0x00, 0x08, 0x07, 0x00, /* dwMaxVideoFrameBufferSize = 460800（450KB，压缩最坏帧余量）*/
     0x15, 0x16, 0x05, 0x00, /* dwDefaultFrameInterval = 333333（100ns 单位 = 30fps）*/
     1,                      /* bFrameIntervalType=1：离散帧率 1 个 */

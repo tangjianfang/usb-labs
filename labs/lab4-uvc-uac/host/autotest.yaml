@@ -1,5 +1,5 @@
 name: lab4-uvc-uac 产测
-device: {backend: uvc, vid: 0x2341, pid: 0x0004, camera_index: 0}
+device: {backend: uvc, vid: 0x1234, pid: 0x5678, camera_index: 0}  # 与 firmware/src/uvc_descriptors.c 一致
 steps:
   - {type: uvc_formats, name: UVC 接口核对, limits: {min_uvc_itf: 2}}
   - {type: uvc_capture_frames, name: 帧采集, frames: 30, limits: {min_frames: 30}}

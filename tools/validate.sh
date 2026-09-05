@@ -9,7 +9,7 @@ while IFS= read -r f; do
     [ -n "$link" ] || continue
     case "$link" in http*|\#*) continue ;; esac
     [ -e "$dir/$link" ] || { echo "断链: [$f] -> $link"; broken=$((broken+1)); }
-  done < <(grep -oE '\]\([^)#][^)]*\)' "$f" 2>/dev/null | sed -E 's/^\]\(//; s/\)$//')
+  done < <(grep -oE '\]\([^)#][^)]*\)' "$f" 2>/dev/null | sed -E 's/^\]\(//; s/\)$//; s/#.*$//')
   n=$(grep -c '^```' "$f"); [ $((n % 2)) -ne 0 ] && { echo "围栏未闭合: $f"; unbalanced=$((unbalanced+1)); }
 done < <(find . -path ./.git -prune -o -name '*.md' -type f -print)
 echo "链接断链 $broken，围栏异常 $unbalanced"
