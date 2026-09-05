@@ -1,0 +1,10 @@
+# 构建产物
+firmware/**/build/
+firmware/**/*.o
+firmware/**/*.elf
+firmware/**/*.uf2
+firmware/**/*.bin
+__pycache__/
+*.pyc
+# 本地规范缓存（如有）不入公开库
+specs_local/
