@@ -1,0 +1,27 @@
+name: usbtest-mock
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mock-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 安装基础依赖
+        run: pip install pyyaml
+      - name: 七实验室产测计划 mock 回归
+        run: |
+          cd tools
+          fail=0
+          for plan in ../labs/*/host/autotest.yaml; do
+            python -m usbtest --plan "$plan" --mock --report-dir /tmp/reports || fail=1
+          done
+          exit $fail
+      - name: 轻量校验（链接/围栏）
+        run: bash tools/validate.sh
