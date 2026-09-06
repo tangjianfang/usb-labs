@@ -180,7 +180,9 @@ USBTestStudio/
     ├── usb/device_enumerator.*   USB/HID 接口枚举（SetupDi + CfgMgr32）
     ├── usb/hid_port.*            HID caps / 重叠读 / 输出报告 / QPC 回报率直方图
     ├── usb/serial_port.*         DCB / 重叠读写 / 环回 / PD 遥测（key=value）
-    ├── usb/msc_scsi.*            SCSI 直通 INQUIRY/READ_CAPACITY/READ10 + sense（只读）
+    ├── usb/msc_scsi.*            SCSI 直通 INQUIRY/READ_CAPACITY/READ10 + sense（只读；探测命令
+    │                             3s 有界单一事实源 kMscProbeTimeoutS——auto_detect/引擎/只读校验
+    │                             孪生探测路径同界收口，探测内核模板化可注假件自测，evolve #74）
     ├── usb/winusb_port.*         EP-4 S5 WinUSB 批量/中断管道（接口 0 + 管道选型 + 重叠读写；
     │                             VID/PID 路径解析与选型为纯逻辑，离线自测覆盖）
     ├── channel/channel.h         EP-4 会话台统一通道契约 IChannel（open/send/on_receive/stats）
@@ -192,7 +194,8 @@ USBTestStudio/
     ├── discovery/device_catalog.h EP-4 S2 目录条目+即时过滤（多关键词 AND/kind 掩码，纯逻辑）
     ├── discovery/serial_enum.h   COM 口枚举（SERIALCOMM 注册表，数字序排序）
     ├── discovery/msc_enum.h      EP-4 S5 USB 大容量盘目录行（PhysicalDrive0..9 BusTypeUsb 过滤；
-    │                             探测 3s 有界+失败留痕，扫描内核模板化可注假件自测，evolve #73）
+    │                             探测 3s 有界+失败留痕，扫描内核模板化可注假件自测，evolve #73；
+    │                             超时常量自 #74 起别名 kMscProbeTimeoutS 单一事实源）
     ├── discovery/catalog_build.h EP-4 S2/S5 目录组装（DeviceInfo+MSC+COM 合流）+ 会话工厂（四通道→IChannel）
     ├── session/session_codec.h  EP-4 S3 收发编解码（发送框智能识别/双视图/时间戳行，纯逻辑）
     ├── session/session_core.h   EP-4 S3 会话核心（帧日志/发送历史/周期节拍/时间基准，纯逻辑）

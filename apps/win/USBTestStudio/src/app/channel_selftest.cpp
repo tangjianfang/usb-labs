@@ -216,6 +216,8 @@ public:
                        unsigned timeout_s = 0) {
         if (!m_open) return false;
         last_probe_timeout_s = timeout_s;
+        s_last_probe_timeout_s = timeout_s;
+        if (m_index < s_cap_from) return false;   // 按盘号模拟容量探测失败/超时
         *total = total_sectors;
         *blk = block_size;
         return true;
@@ -224,10 +226,15 @@ public:
                       std::wstring*, unsigned timeout_s = 0) {
         if (!m_open) return false;
         last_probe_timeout_s = timeout_s;
+        s_last_probe_timeout_s = timeout_s;
         if (v) *v = vendor;
         if (p) *p = product;
         if (r) *r = rev;
         if (t) *t = 0;
+        return true;
+    }
+    bool bus_is_usb(bool* is_usb, std::wstring*) {
+        *is_usb = m_open && m_index >= s_usb_from;   // 按盘号模拟 BusTypeUsb
         return true;
     }
     bool pass_through(const uint8_t* cdb, uint8_t cdb_len, void* data, uint32_t data_len,
@@ -279,6 +286,11 @@ public:
     uint32_t last_data_len = 0;
     unsigned last_timeout_s = 0;
     unsigned last_probe_timeout_s = 0;   // open 探测（容量/INQUIRY）透传的超时秒数
+    // auto_detect 假件旋钮（msc_auto_detect_impl 每轮默认构造新实例，按盘号的
+    // 行为差异只能经静态配置表达；默认 0 = 全盘 USB/容量恒成功，不影响既有用例）
+    static inline unsigned s_usb_from = 0;        // 盘号 ≥ 此值才算 BusTypeUsb
+    static inline unsigned s_cap_from = 0;        // 盘号 ≥ 此值 READ_CAPACITY 才成功
+    static inline unsigned s_last_probe_timeout_s = 0;  // 跨实例镜像（实例随轮析构）
 
 private:
     std::atomic<bool> m_open{false};
@@ -867,6 +879,21 @@ int wmain() {
         check(ch.open(&err), "MSC 重开成功");
         check(ch.port().last_probe_timeout_s == 3, "MSC open 探测（容量/INQUIRY）透传 3s 有界");
         ch.close();
+    }
+    {   // msc_auto_detect_impl：产测域孪生探测路径（evolve #74，收口 #73 残余 2b）——
+        // 假件按盘号配置 BusType/容量成败，钉住选择行为与 3s 有界超时透传
+        //（旧实现不传超时 → 端口默认 10s；断言 3≠假件默认 0，非巧合钉）
+        check(msc_auto_detect_impl<MockMscPort>() == 0, "auto_detect 默认取首个 USB 盘 0");
+        check(MockMscPort::s_last_probe_timeout_s == 3,
+              "auto_detect 探测透传 3s 有界（不回落端口默认 10s）");
+        MockMscPort::s_usb_from = 2;
+        check(msc_auto_detect_impl<MockMscPort>() == 2, "auto_detect 跳过非 USB 盘 0/1");
+        MockMscPort::s_cap_from = 5;
+        check(msc_auto_detect_impl<MockMscPort>() == 5, "auto_detect 跳过容量探测失败盘");
+        MockMscPort::s_usb_from = 10;
+        check(msc_auto_detect_impl<MockMscPort>() == -1, "auto_detect 无 USB 盘返回 -1");
+        MockMscPort::s_usb_from = 0;   // 还原全局默认（后续若有用例不受旋钮影响）
+        MockMscPort::s_cap_from = 0;
     }
 
     printf("channel_selftest: %d/%d PASS\n", g_pass, g_pass);

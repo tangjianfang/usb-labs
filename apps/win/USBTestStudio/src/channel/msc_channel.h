@@ -249,7 +249,8 @@ private:
     unsigned m_block = 0;          // READ_CAPACITY 块大小（0=未知）
     static constexpr unsigned kDefaultTimeoutS = 3; // 默认有界 3s（UI 线程 send 上界）
     unsigned m_timeout_s = kDefaultTimeoutS;
-    static constexpr unsigned kProbeTimeoutS = 3;   // open 时的容量/INQUIRY 探测同界
+    // open 时的容量/INQUIRY 探测同界（evolve #74 起别名 msc_scsi.h 单一事实源）
+    static constexpr unsigned kProbeTimeoutS = kMscProbeTimeoutS;
     PortT m_port;
     mutable std::mutex m_mtx;      // 保护 m_stats / m_cb
     ChannelStats m_stats;

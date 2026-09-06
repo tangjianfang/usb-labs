@@ -76,19 +76,7 @@ bool MscScsi::bus_is_usb(bool* is_usb, std::wstring* err) {
     return true;
 }
 
-int MscScsi::auto_detect_usb_drive() {
-    for (unsigned i = 0; i < 10; ++i) {
-        MscScsi probe;
-        if (!probe.open_physical_drive(i, false)) continue;
-        bool usb = false;
-        if (!probe.bus_is_usb(&usb) || !usb) continue;
-        unsigned long long total = 0;
-        unsigned blk = 0;
-        std::wstring cap_err;
-        if (probe.read_capacity(&total, &blk, &cap_err) && blk > 0) return static_cast<int>(i);
-    }
-    return -1;
-}
+int MscScsi::auto_detect_usb_drive() { return msc_auto_detect_impl<MscScsi>(); }
 
 void MscScsi::parse_sense(const unsigned char* sense, unsigned len) {
     m_sense_key = m_sense_asc = m_sense_ascq = 0;
@@ -213,7 +201,7 @@ bool MscScsi::read10(unsigned long long lba, unsigned blocks, std::vector<uint8_
                      std::wstring* err) {
     unsigned blk = 0;
     unsigned long long total = 0;
-    if (!read_capacity(&total, &blk, err)) return false;
+    if (!read_capacity(&total, &blk, err, kMscProbeTimeoutS)) return false;
     if (blocks == 0 || blocks > 1024) {
         if (err) *err = L"READ10 块数越界（1..1024）";
         return false;
@@ -257,7 +245,7 @@ MscReadVerifyResult msc_read_verify(MscScsi& d, unsigned long long lba_start, un
     unsigned long long total = 0;
     unsigned blk = 0;
     std::wstring err;
-    if (!d.read_capacity(&total, &blk, &err)) {
+    if (!d.read_capacity(&total, &blk, &err, kMscProbeTimeoutS)) {
         r.detail = L"READ_CAPACITY 失败: " + err;
         return r;
     }

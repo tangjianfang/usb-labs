@@ -490,7 +490,8 @@ StepResult TestEngine::step_msc_inquiry(const PlanStep&) {
         return fail_step(err);
     std::string vendor, product, rev;
     unsigned char type = 0xFF;
-    if (!msc.scsi_inquiry(&vendor, &product, &rev, &type, &err)) return fail_step(err);
+    if (!msc.scsi_inquiry(&vendor, &product, &rev, &type, &err, kMscProbeTimeoutS))
+        return fail_step(err);
     r.measured.push_back({L"vendor", mv_str(wraii::ascii_to_wide(vendor))});
     r.measured.push_back({L"product", mv_str(wraii::ascii_to_wide(product))});
     r.measured.push_back({L"type", mv_int(type)});
@@ -511,7 +512,7 @@ StepResult TestEngine::step_msc_capacity(const PlanStep& st) {
         return fail_step(err);
     unsigned long long sectors = 0;
     unsigned blk = 0;
-    if (!msc.read_capacity(&sectors, &blk, &err)) return fail_step(err);
+    if (!msc.read_capacity(&sectors, &blk, &err, kMscProbeTimeoutS)) return fail_step(err);
     double gb = static_cast<double>(sectors) * static_cast<double>(blk) / 1e9;
     r.measured.push_back({L"gb", mv_dbl(std::round(gb * 100.0) / 100.0)});
     r.measured.push_back({L"block", mv_int(blk)});

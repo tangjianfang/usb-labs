@@ -27,8 +27,10 @@ inline ConsoleDevice make_device(unsigned index, const std::wstring& identity) {
 
 // 扫描探测超时（秒，evolve #73）：旧实现走端口默认 10s——扫描虽在后台线程不
 // 冻结 UI，但病态盘 ×10 轮最坏可拖满分钟级且无取消；3s 与 MscChannel open
-// 探测同界。有界性与失败可见性由 discovery_selftest 以假件钉住（对抗复核 2a/2c）
-inline constexpr unsigned kScanTimeoutS = 3;
+// 探测同界。有界性与失败可见性由 discovery_selftest 以假件钉住（对抗复核 2a/2c）。
+// evolve #74 起取值别名至 msc_scsi.h 的 kMscProbeTimeoutS（全仓探测上界单一
+// 事实源，auto_detect/引擎孪生路径同界收口）
+inline constexpr unsigned kScanTimeoutS = kMscProbeTimeoutS;
 
 // 扫描内核（模板化 PortT 以便离线自测注入假件；产线形态即 MscScsi）
 template <typename PortT = MscScsi>
