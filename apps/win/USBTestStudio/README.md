@@ -32,10 +32,14 @@ cmake --build build --config Release
 ## 2. 运行
 
 ```
-USBTestStudio.exe [--plan <路径>] [--dut-sn <SN>] [--station <工位>] [--auto]
+USBTestStudio.exe [--plan <路径>] [--dut-sn <SN>] [--station <工位>] [--auto] [--console]
 ```
 - 计划默认查找 **exe 同目录 `plan.json`**；示例见 `plans/sample_plan.json`。
 - `--auto`：产线模式，测试完成后自动退出并把**退出码**交给调用方。
+- `--console`：**EP-4 工程师通信控制台**（独立窗口，产测模式旁路）——设备目录
+  即时过滤（搜索框输入 名称/VID:PID/协议/路径 子串，空格分隔多词 AND，协议
+  复选框二次过滤），F5 后台重扫，**双击设备行开会话**（HID/串口通道即刻打开；
+  收发台 UI 为 S3 切片）。
 - 退出码：`0` PASS，`1` FAIL，`2` 中止（用户关闭/停止），`3` 计划加载失败。
 - 报告自动写盘 `exe\reports\report_<计划名>_<DUT_SN>_<时间戳>.json`；也可 Ctrl+S 另存。
 - 快捷键：**F5** 扫描设备，**Ctrl+R** 运行计划，**Ctrl+S** 导出报告。
@@ -172,6 +176,7 @@ USBTestStudio/
     ├── channel/hid_channel.h     IChannel HID 实现（Report ID 透传，模板化同上）
     ├── discovery/device_catalog.h EP-4 S2 目录条目+即时过滤（多关键词 AND/kind 掩码，纯逻辑）
     ├── discovery/serial_enum.h   COM 口枚举（SERIALCOMM 注册表，数字序排序）
+    ├── discovery/catalog_build.h EP-4 S2 目录组装（DeviceInfo+COM 合流）+ 会话工厂（→IChannel）
     ├── engine/test_engine.*      计划加载、步骤分发、判定、JSON 报告、事件泵
-    └── ui/log_view.* / main_window.*   RichEdit 日志 / 主窗口（DPI、快捷键、布局）
+    └── ui/log_view.* / main_window.* / console_window.*   RichEdit 日志 / 产测主窗口 / EP-4 设备发现窗口
 ```
