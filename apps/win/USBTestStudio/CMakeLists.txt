@@ -42,3 +42,21 @@ if(MSVC)
         "/ENTRY:wWinMainCRTStartup"
     )
 endif()
+
+# EP-4 S1 通道层离线自测（控制台；MockEchoPort 注入模板 + SerialPort 显式实例化）
+add_executable(channel_selftest
+    src/app/channel_selftest.cpp
+    src/framework/win32_rai.cpp
+    src/usb/serial_port.cpp
+)
+target_include_directories(channel_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(channel_selftest PRIVATE
+    UNICODE _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+)
+if(MSVC)
+    target_compile_options(channel_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()
+target_link_libraries(channel_selftest PRIVATE setupapi cfgmgr32 hid)
