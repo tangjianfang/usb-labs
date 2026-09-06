@@ -61,3 +61,18 @@ if(MSVC)
     target_compile_options(channel_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
 target_link_libraries(channel_selftest PRIVATE setupapi cfgmgr32 hid)
+
+# EP-4 S2 设备发现离线自测（控制台；目录模型+即时过滤+COM 枚举，无 USB 设备亦可跑）
+add_executable(discovery_selftest
+    src/app/discovery_selftest.cpp
+)
+target_include_directories(discovery_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(discovery_selftest PRIVATE
+    UNICODE _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+)
+if(MSVC)
+    target_compile_options(discovery_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()

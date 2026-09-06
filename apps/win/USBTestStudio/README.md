@@ -170,6 +170,8 @@ USBTestStudio/
     ├── channel/channel.h         EP-4 会话台统一通道契约 IChannel（open/send/on_receive/stats）
     ├── channel/serial_channel.h  IChannel 串口实现（模板化 PortT，可注入假件自测）
     ├── channel/hid_channel.h     IChannel HID 实现（Report ID 透传，模板化同上）
+    ├── discovery/device_catalog.h EP-4 S2 目录条目+即时过滤（多关键词 AND/kind 掩码，纯逻辑）
+    ├── discovery/serial_enum.h   COM 口枚举（SERIALCOMM 注册表，数字序排序）
     ├── engine/test_engine.*      计划加载、步骤分发、判定、JSON 报告、事件泵
     └── ui/log_view.* / main_window.*   RichEdit 日志 / 主窗口（DPI、快捷键、布局）
 ```
