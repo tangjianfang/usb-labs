@@ -97,3 +97,18 @@ target_compile_definitions(session_selftest PRIVATE
 if(MSVC)
     target_compile_options(session_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
+
+# EP-4 S4 解析面板前半离线自测（控制台；HID 报告解码纯逻辑——键码表/修饰键位图/
+# 鼠标按钮与位移/消费页用量/Report ID 剥离，码表口径见 hid_parser.h 文件头）
+add_executable(parser_selftest
+    src/app/parser_selftest.cpp
+)
+target_include_directories(parser_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(parser_selftest PRIVATE
+    UNICODE _UNICODE
+    NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+)
+if(MSVC)
+    target_compile_options(parser_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()
