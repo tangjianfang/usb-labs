@@ -132,6 +132,10 @@ LRESULT SessionPane::on_message(UINT msg, WPARAM wp, LPARAM lp) {
                 m_view.absolute_ts =
                     ::SendMessageW(m_chkAbsTs, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 render_rebuild();
+            } else if (id == IDC_CHK_PARSED && code == BN_CLICKED) {
+                m_view.parsed_view =
+                    ::SendMessageW(m_chkParsed, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                render_rebuild();   // 原始|解析切换 = 按新口径看当前账面（§4.7）
             } else if (id == IDC_ENCODING && code == CBN_SELENDOK) {
                 status_refresh();   // 模式名入状态行
             }
@@ -170,6 +174,17 @@ void SessionPane::on_create() {
     create_controls();
     make_fonts();
     apply_fonts();
+
+    // S4 解析视图（§4.7 跟随设备协议）：选型来自通道描述（HID 顶层 usage
+    // page/usage，HidChannel open 时透传）；HID 已收录选型默认开，无解析器
+    // （未收录 usage 组合）置灰——原始视图始终可用
+    m_view.parser = parser_select::for_channel(m_channel->desc());
+    if (m_view.parser.kind == parser_select::PaneParser::Kind::none) {
+        ::EnableWindow(m_chkParsed, FALSE);
+    } else if (m_view.parser.kind != parser_select::PaneParser::Kind::ascii) {
+        ::SendMessageW(m_chkParsed, BM_SETCHECK, BST_CHECKED, 0);
+        m_view.parsed_view = true;
+    }
 
     // 接收编组（channel.h 线程约定）：读线程只 Post 载荷，窗口已亡则地删
     SessionPane* self = this;
@@ -212,6 +227,8 @@ void SessionPane::create_controls() {
     ::SendMessageW(m_chkHex, BM_SETCHECK, BST_CHECKED, 0);   // 默认 Hex（§4.6 惯例）
     m_chkAbsTs = pane_control(m_hwnd, L"Button", L"绝对时间",
                               BS_AUTOCHECKBOX | WS_TABSTOP, IDC_CHK_ABSTS);
+    m_chkParsed = pane_control(m_hwnd, L"Button", L"解析视图",
+                               BS_AUTOCHECKBOX | WS_TABSTOP, IDC_CHK_PARSED);
 
     m_rx = pane_control(m_hwnd, L"Edit", L"",
                         WS_BORDER | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_READONLY
@@ -236,7 +253,8 @@ void SessionPane::make_fonts() {
 void SessionPane::apply_fonts() {
     if (!m_font) return;
     HWND ui[] = {m_send,   m_encoding, m_btnSend, m_chkPeriodic, m_interval,
-                 m_labelMs, m_chkPause, m_btnClear, m_chkHex, m_chkAbsTs, m_status};
+                 m_labelMs, m_chkPause, m_btnClear, m_chkHex, m_chkAbsTs, m_chkParsed,
+                 m_status};
     for (HWND h : ui)
         if (h) ::SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
     if (m_rx && m_mono)
@@ -267,9 +285,9 @@ void SessionPane::layout() {
     x += itvW;
     ::MoveWindow(m_labelMs, x, y1, msW, ctlH, TRUE);
 
-    // 行 2（接收工具条）：暂停/清屏 + Hex/时间戳切换
+    // 行 2（接收工具条）：暂停/清屏 + Hex/时间戳/解析切换
     const int y2 = y1 + ctlH + m;
-    const int pauseW = S(60), clearW = S(60), hexW = S(82), absW = S(92);
+    const int pauseW = S(60), clearW = S(60), hexW = S(82), absW = S(92), parseW = S(82);
     x = m;
     ::MoveWindow(m_chkPause, x, y2, pauseW, ctlH, TRUE);
     x += pauseW + S(4);
@@ -278,6 +296,8 @@ void SessionPane::layout() {
     ::MoveWindow(m_chkHex, x, y2, hexW, ctlH, TRUE);
     x += hexW + S(4);
     ::MoveWindow(m_chkAbsTs, x, y2, absW, ctlH, TRUE);
+    x += absW + S(4);
+    ::MoveWindow(m_chkParsed, x, y2, parseW, ctlH, TRUE);
 
     // 行 3（接收区吃余量）+ 行 4（面板状态）
     const int y3 = y2 + ctlH + m;
@@ -425,6 +445,8 @@ void SessionPane::status_refresh() {
                     : L" · 自动识别";
     if (m_core.periodic.armed())
         s += L" · 周期 " + std::to_wstring(m_core.periodic.interval()) + L"ms";
+    if (m_view.parsed_view && m_view.parser.kind != parser_select::PaneParser::Kind::none)
+        s += L" · 解析: " + std::wstring(m_view.parser.name());
     if (m_view.paused()) s += L" · 已暂停（后台继续收）";
     if (!m_note.empty()) s += L" · " + m_note;
     ::SetWindowTextW(m_status, s.c_str());

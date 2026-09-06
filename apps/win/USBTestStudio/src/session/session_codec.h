@@ -183,12 +183,17 @@ inline std::wstring format_relative(unsigned long long delta_ms) {
 
 // —— 接收区一行："<时间戳> <IN|OUT> <视图文本>"（设计 §2 接收区样例同构；
 // 时间戳标签由会话层按绝对/相对口径预先算好传入，编解码层保持无状态） ——
+inline std::wstring format_frame_body_line(const std::wstring& timestamp_label, bool out,
+                                           const std::wstring& body) {
+    std::wstring line = timestamp_label;
+    line += out ? L" OUT " : L" IN  ";
+    line += body;
+    return line;
+}
 inline std::wstring format_frame_line(const ChannelFrame& f, bool hex_view,
                                       const std::wstring& timestamp_label) {
-    std::wstring line = timestamp_label;
-    line += f.out ? L" OUT " : L" IN  ";
-    line += hex_view ? to_hex_view(f.bytes) : to_ascii_view(f.bytes);
-    return line;
+    return format_frame_body_line(
+        timestamp_label, f.out, hex_view ? to_hex_view(f.bytes) : to_ascii_view(f.bytes));
 }
 
 }  // namespace session_codec

@@ -14,6 +14,7 @@
 #pragma once
 
 #include "channel/channel.h"
+#include "parser/parser_select.h"
 #include "session/session_codec.h"
 
 #include <deque>
@@ -146,10 +147,16 @@ public:
                          : session_codec::format_relative(0);
     }
 
-    // 接收区一行（视图/时间戳口径在此收口，UI 只拼接）
-    std::wstring frame_line(const ChannelFrame& f, bool hex_view, bool absolute_ts) const {
-        return session_codec::format_frame_line(
-            f, hex_view, absolute_ts ? ts_absolute(f.t_ms) : ts_relative(f.t_ms));
+    // 接收区一行（视图/时间戳口径在此收口，UI 只拼接）。parser 非空且选型
+    // 非 none 时正文走解析文本（S4 解析视图：设计 §2 "原始|解析"切换的解析侧），
+    // 否则按 hex/ascii 原始视图——同一行装配，两视图只差正文。
+    std::wstring frame_line(const ChannelFrame& f, bool hex_view, bool absolute_ts,
+                            const parser_select::PaneParser* parser = nullptr) const {
+        const std::wstring ts = absolute_ts ? ts_absolute(f.t_ms) : ts_relative(f.t_ms);
+        if (parser != nullptr && parser->kind != parser_select::PaneParser::Kind::none)
+            return session_codec::format_frame_body_line(ts, f.out,
+                                                         parser_select::parse_frame(f, *parser));
+        return session_codec::format_frame_line(f, hex_view, ts);
     }
 
 private:

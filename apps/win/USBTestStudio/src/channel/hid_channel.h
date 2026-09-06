@@ -30,6 +30,10 @@ public:
         m_desc.path = m_path;
         m_desc.display = wraii::fmt_v(L"HID %04X:%04X", c.vid, c.pid);
         if (!c.product.empty()) m_desc.display += L" " + c.product;
+        // 顶层 usage 能力透传给会话层：S4 解析面板按 usage page/usage 选型
+        m_desc.hid_usage_page = c.usage_page;
+        m_desc.hid_usage = c.usage;
+        m_desc.hid_report_id = c.has_report_id;
         m_stop = false;
         m_reader = std::thread([this] { read_loop(); });
         return true;

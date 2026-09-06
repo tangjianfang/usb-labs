@@ -23,6 +23,7 @@ struct HidCapsInfo {
     USHORT  vid = 0;                 // HIDD_ATTRIBUTES.VendorID
     USHORT  pid = 0;                 // HIDD_ATTRIBUTES.ProductID
     USHORT  version = 0;             // HIDD_ATTRIBUTES.VersionNumber
+    bool    has_report_id = false;   // 任一输入 Value/Button caps ReportID≠0（S4 解析剥离判定）
     bool    write_capable = false;   // 句柄是否以 GENERIC_WRITE 打开成功
     std::wstring product;            // HidD_GetProductString（best-effort）
 };

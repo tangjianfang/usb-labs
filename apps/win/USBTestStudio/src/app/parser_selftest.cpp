@@ -1,12 +1,20 @@
-// parser_selftest.cpp — EP-4 S4 解析面板前半·离线自测（无真机即可跑）：
-// hid_parser 纯逻辑行为面——键盘页键码表（0x04~0x65 对照 HUT-1.3 §10）、
+// parser_selftest.cpp — EP-4 S4 解析面板·离线自测（无真机即可跑）：
+// 前半 hid_parser 纯逻辑行为面——键盘页键码表（0x04~0x65 对照 HUT-1.3 §10）、
 // 修饰键位图（HID-1.11 bit0 LCtrl…bit7 RGui）、boot 键盘 8 字节报告行格式、
 // ErrorRollOver 错误码、鼠标按钮位图/X·Y 有符号位移/滚轮/宽轴 LE、
 // 消费页用量名（§15.7/§15.9：B0 Play…EA Vol−）、Report ID 剥离、
-// AsciiParser 委托 session_codec 口径一致。S4 后半 UI 面板接线随整片真机验收。
+// AsciiParser 委托 session_codec 口径一致；
+// 后半 parser_select 选型与调度——usage page/usage → 键盘/鼠标/消费页/ASCII/
+// 无（数值核对自缓存 HUT-1.3 §4：GD 页 0x01 内 02 Mouse/06 Keyboard/07 Keypad、
+// §15 Consumer 0x0C）、帧解析分发、frame_line 解析行装配、RenderCursor
+// 原始|解析切换。UI 面板接线随整片真机验收。
 #include "parser/hid_parser.h"
+#include "parser/parser_select.h"
+#include "session/session_core.h"
+#include "session/session_view.h"
 
 #include <cstdio>
+#include <cwchar>
 #include <initializer_list>
 #include <string>
 #include <vector>
@@ -137,6 +145,97 @@ int main() {
     expect(format_ascii({0x41, 0x42}), L"AB", "ASCII 委托：可打印直出");
     expect(format_ascii({0xE4, 0xBD, 0xA0}), L"你", "ASCII 委托：UTF-8 保真");
     expect(format_ascii({0x01}), L".", "ASCII 委托：控制符 → .");
+
+    // —— S4 后半：解析器选型（usage 数值核对自缓存 HUT-1.3 §4/§15） ——
+    using PK = parser_select::PaneParser::Kind;
+    auto chan = [](const wchar_t* kind, unsigned page, unsigned usage, bool rid) {
+        ChannelDesc d;
+        d.kind = kind;
+        d.hid_usage_page = page;
+        d.hid_usage = usage;
+        d.hid_report_id = rid;
+        return parser_select::for_channel(d);
+    };
+    check(chan(L"hid", 0x01, 0x06, true).kind == PK::hid_keyboard, "选型: GD+06 → 键盘");
+    check(chan(L"hid", 0x01, 0x07, false).kind == PK::hid_keyboard, "选型: GD+07 Keypad → 键盘");
+    check(chan(L"hid", 0x01, 0x02, true).kind == PK::hid_mouse, "选型: GD+02 → 鼠标");
+    check(chan(L"hid", 0x0C, 0x01, false).kind == PK::hid_consumer, "选型: 消费页 0x0C → 消费");
+    check(chan(L"hid", 0x01, 0x04, false).kind == PK::none, "选型: GD+04 Joystick 未收录 → 无");
+    check(chan(L"hid", 0x00, 0x00, false).kind == PK::none, "选型: usage 缺失 → 无");
+    check(chan(L"serial", 0, 0, false).kind == PK::ascii, "选型: 串口 → ASCII");
+    check(chan(L"loopback", 0, 0, false).kind == PK::ascii, "选型: 环回 → ASCII");
+    check(chan(L"", 0, 0, false).kind == PK::none, "选型: 未知通道 → 无");
+    check(chan(L"hid", 0x01, 0x06, true).has_report_id, "选型: report_id 透传");
+    check(wcscmp(chan(L"hid", 0x01, 0x06, true).name(), L"键盘") == 0, "选型: 名称 键盘");
+
+    // —— S4 后半：帧解析调度（parse_frame 统一入口） ——
+    auto frx = [](std::initializer_list<uint8_t> b) {
+        ChannelFrame f;
+        f.bytes.assign(b);
+        return f;
+    };
+    expect(parser_select::parse_frame(
+               frx({0x02, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00}),
+               {PK::hid_keyboard, true}),
+           L"LShift+A↓", "调度: 键盘+Report ID 剥离");
+    expect(parser_select::parse_frame(frx({0x01, 0x00, 0x00, 0x01}), {PK::hid_mouse, true}),
+           L"（无按键） X+0 Y+1", "调度: 鼠标按剥离后长度猜 boot 格式");
+    expect(parser_select::parse_frame(frx({0x00, 0x00, 0x01, 0x00}), {PK::hid_mouse, false}),
+           L"（无按键） X+0 Y+1 滚轮+0", "调度: 鼠标无 Report ID（4 字节含滚轮）");
+    expect(parser_select::parse_frame(frx({0xE9}), {PK::hid_consumer, false}), L"Vol+",
+           "调度: 消费页");
+    expect(parser_select::parse_frame(frx({0xE4, 0xBD, 0xA0}), {PK::ascii, false}), L"你",
+           "调度: ASCII 委托同口径");
+    expect(parser_select::parse_frame(frx({0x01}), {PK::none, false}), L"",
+           "调度: 无解析器 → 空串回退原始");
+
+    // —— S4 后半：frame_line 解析行装配（同一行装配，两视图只差正文） ——
+    {
+        session_core::SessionCore c;
+        c.set_time_base(0, 0);
+        const std::vector<uint8_t> kb{0x02, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};
+        c.record_rx(kb.data(), kb.size(), 0);
+        const parser_select::PaneParser p{PK::hid_keyboard, true};
+        expect(c.frame_line(c.journal.frames()[0], true, false, &p), L"0ms IN  LShift+A↓",
+               "frame_line: 解析行正文=键位");
+        expect(c.frame_line(c.journal.frames()[0], true, false),
+               L"0ms IN  02 02 00 04 00 00 00 00 00",
+               "frame_line: 无 parser 回退原始 Hex（默认参不破坏 S3 口径）");
+    }
+
+    // —— S4 后半：RenderCursor 原始|解析切换（poll 增量 / rebuild 全量同口径） ——
+    {
+        session_core::SessionCore c;
+        c.set_time_base(0, 0);
+        const std::vector<uint8_t> a{0x02, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};
+        const std::vector<uint8_t> b{0x02, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        c.record_rx(a.data(), a.size(), 0);
+        c.record_rx(b.data(), b.size(), 10);
+
+        session_view::RenderCursor v;
+        v.parser = {PK::hid_keyboard, true};
+        const auto raw = v.poll(c);
+        check(raw.size() == 2 && raw[0].find(L"02 02 00 04") != std::wstring::npos,
+              "游标: 默认原始视图（Hex 正文）");
+
+        v.parsed_view = true;
+        const auto parsed = v.rebuild(c);
+        check(parsed.size() == 2 && parsed[0] == L"0ms IN  LShift+A↓" && parsed[1] == L"10ms IN  RShift↓",
+              "游标: 解析切换 rebuild 全量按新口径");
+
+        const std::vector<uint8_t> d{0x02, 0x02, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00};
+        c.record_rx(d.data(), d.size(), 20);
+        const auto inc = v.poll(c);
+        check(inc.size() == 1 && inc[0] == L"20ms IN  LShift+B↓",
+              "游标: 解析态后续 poll 增量仍为解析行");
+
+        session_view::RenderCursor w;
+        w.parser = {PK::none, false};
+        w.parsed_view = true;   // 无解析器：开关即使为真也回退原始
+        const auto fb = w.rebuild(c);
+        check(fb.size() == 3 && fb[0].find(L"LShift") == std::wstring::npos,
+              "游标: 选型 none 时解析开关回退原始视图");
+    }
 
     printf("parser_selftest: %d 例全绿\n", g_pass);
     return 0;

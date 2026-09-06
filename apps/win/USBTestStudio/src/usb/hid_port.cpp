@@ -74,6 +74,34 @@ bool HidPort::fill_caps(std::wstring* err) {
     m_caps.input_report_len = caps.InputReportByteLength;
     m_caps.output_report_len = caps.OutputReportByteLength;
     m_caps.feature_report_len = caps.FeatureReportByteLength;
+
+    // Report ID 判定：HIDP_CAPS 无直接字段，标准做法是遍历输入 Value/Button
+    // caps 数组——任一 ReportID≠0 即报告带前缀字节（S4 解析面板剥离口径）
+    m_caps.has_report_id = false;
+    USHORT n_val = caps.NumberInputValueCaps;
+    if (n_val) {
+        std::vector<HIDP_VALUE_CAPS> vc(n_val);
+        if (::HidP_GetValueCaps(HidP_Input, vc.data(), &n_val, preparsed)
+            == HIDP_STATUS_SUCCESS)
+            for (const auto& v : vc)
+                if (v.ReportID != 0) {
+                    m_caps.has_report_id = true;
+                    break;
+                }
+    }
+    if (!m_caps.has_report_id) {
+        USHORT n_btn = caps.NumberInputButtonCaps;
+        if (n_btn) {
+            std::vector<HIDP_BUTTON_CAPS> bc(n_btn);
+            if (::HidP_GetButtonCaps(HidP_Input, bc.data(), &n_btn, preparsed)
+                == HIDP_STATUS_SUCCESS)
+                for (const auto& b : bc)
+                    if (b.ReportID != 0) {
+                        m_caps.has_report_id = true;
+                        break;
+                    }
+        }
+    }
     return true;
 }
 

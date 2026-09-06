@@ -27,6 +27,11 @@ struct ChannelDesc {
     std::wstring kind;      // "serial" / "hid" / "loopback"
     std::wstring display;   // "COM7 @115200 8N1" / "HID 1234:0002 ..."
     std::wstring path;      // 打开用路径（\\.\COM7 / HID 设备接口路径）
+    // HID 顶层集合能力（HidChannel open 时自 HidCapsInfo 透传；S4 解析面板
+    // 按 usage page/usage 选型，report_id 决定解析前是否剥离前缀字节）
+    unsigned hid_usage_page = 0;   // 0x01 Generic Desktop / 0x0C Consumer …
+    unsigned hid_usage = 0;        // GD 页 0x02 Mouse / 0x06 Keyboard / 0x07 Keypad …
+    bool hid_report_id = false;    // 输入报告带 Report ID 前缀
 };
 
 using ReceiveCallback = std::function<void(const std::vector<uint8_t>&)>;

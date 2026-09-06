@@ -1,6 +1,8 @@
 // session_pane.h — EP-4 S3 会话台后半·每会话一面板（设计 §2 会话标签页内容）：
 // 发送区（发送框智能识别 + 编码锁定组合框 + Ctrl+↵/按钮发送 + 周期 ms）与
-// 接收区（等宽只读多行、暂停/清屏/Hex↔ASCII/相对↔绝对切换）。面板自持
+// 接收区（等宽只读多行、暂停/清屏/Hex↔ASCII/相对↔绝对切换）+ S4 解析视图
+// 开关（§4.7 跟随设备协议：HID 键盘/鼠标/消费页自动解码，选型来自通道描述）。
+// 面板自持
 // IChannel + SessionCore + RenderCursor：接收回调在读线程经 PostMessage 载荷
 // 投递 UI 线程入账渲染（channel.h 线程约定），周期到期由 ConsoleWindow 的
 // 100ms 定时器统一驱动 tick()。ConsoleWindow 建标签后托管本面板，切标签即
@@ -16,6 +18,7 @@
 #include <windows.h>   // HWND：与 console_window.h 同口径，不依赖传递包含
 
 #include "channel/channel.h"
+#include "parser/parser_select.h"
 #include "session/session_core.h"
 #include "session/session_view.h"
 
@@ -84,12 +87,14 @@ private:
         IDC_CHK_ABSTS = 9,      // 相对↔绝对时间戳
         IDC_PANE_STATUS = 10,   // 面板状态行
         IDC_RX = 11,            // 接收区
+        IDC_CHK_PARSED = 12,    // 原始|解析视图切换（S4 §4.7；无解析器时置灰）
     };
 
     HWND m_hwnd = nullptr;
     HWND m_send = nullptr, m_encoding = nullptr, m_btnSend = nullptr;
     HWND m_chkPeriodic = nullptr, m_interval = nullptr, m_labelMs = nullptr;
     HWND m_chkPause = nullptr, m_btnClear = nullptr, m_chkHex = nullptr, m_chkAbsTs = nullptr;
+    HWND m_chkParsed = nullptr;
     HWND m_rx = nullptr, m_status = nullptr;
     HFONT m_font = nullptr, m_mono = nullptr;
     UINT m_dpi = 96;
