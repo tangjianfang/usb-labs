@@ -279,11 +279,18 @@ bool HidPort::set_output_report_sync(std::vector<uint8_t>& buf, std::wstring* er
     // 回退路径：HidD_SetOutputReport 内部为同步 SET_REPORT 控制传输（不可取消，
     // 有界性由主机栈控制传输超时保证）。若在 FILE_FLAG_OVERLAPPED 句柄上调用失败，
     // 回退为“临时同步句柄”再试一次（组合行为以 MSDN 为准，见 README 不确定点）。
+    // 仅瞬时失败（<kHidSyncRetryFastMs）重试：首次已耗时的失败说明传输到达过
+    // 设备，重发只是把 UI 线程的等待再放大一段不受控时间（evolve #73）。
+    const ULONGLONG t0 = ::GetTickCount64();
     if (::HidD_SetOutputReport(m_handle.get(), buf.data(),
                                static_cast<ULONG>(buf.size())) != FALSE)
         return true;
 
     DWORD sync_err = ::GetLastError();
+    if (!hid_sync_retry_allowed(::GetTickCount64() - t0)) {
+        if (err) *err = wraii::win_err(L"HidD_SetOutputReport", sync_err);
+        return false;
+    }
     HANDLE h2 = ::CreateFileW(m_path.c_str(), GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0,
                               nullptr);

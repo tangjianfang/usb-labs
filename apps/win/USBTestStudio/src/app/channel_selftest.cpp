@@ -468,6 +468,13 @@ int wmain() {
         // 计统计且恢复后续发——真件的超时+CancelIoEx+GOR 回收序列依赖 OS 行为
         // 无法离线模拟，离线钉住通道层契约
         check(ch.port().last_write_timeout_ms == 3000, "HID send 透传通道级 3s 写超时");
+        // 回退路径二次尝试策略（evolve #73，纯逻辑）：瞬时失败可二次尝试（句柄
+        // 组合兼容回退），慢失败（≥1s，传输到达过设备）不再重试——否则 UI 线程
+        // send 的等待上界被二次不受控控制传输放大（#72 残余缺陷）
+        check(hid_sync_retry_allowed(0) && hid_sync_retry_allowed(999),
+              "HID 回退策略：瞬时失败(<1s)允许二次尝试");
+        check(!hid_sync_retry_allowed(1000) && !hid_sync_retry_allowed(5000),
+              "HID 回退策略：慢失败(≥1s)不再二次尝试");
         ch.port().fail_write = true;
         check(!ch.send(rep1, sizeof rep1, &err), "HID 写失败 send 返回 false");
         check(!err.empty(), "HID 写失败给出 err");
@@ -849,8 +856,11 @@ int wmain() {
         check(ch.send(inquiry, 6, &err) && ch.port().last_timeout_s == 1,
               "MSC set_read_timeout 500ms 向上取整 1s");
         ch.set_read_timeout(0);
-        check(ch.send(inquiry, 6, &err) && ch.port().last_timeout_s == 0,
-              "MSC set_read_timeout 0→端口默认");
+        check(ch.send(inquiry, 6, &err) && ch.port().last_timeout_s == 3,
+              "MSC set_read_timeout 0→通道默认 3s（不回落端口 10s，#72 残余埋雷）");
+        ch.set_read_timeout(4294967295u);
+        check(ch.send(inquiry, 6, &err) && ch.port().last_timeout_s == 4294968u,
+              "MSC set_read_timeout 极大值无回绕（(2^32-1+999)/1000，不为 0）");
 
         ch.close();
         check(!ch.is_open(), "MSC close 后未打开");

@@ -220,9 +220,19 @@ public:
     }
     // ms → 秒向上取整（MscScsi 直通超时单位为秒）。默认 3s：会话台 send 即 UI
     // 线程同步调用，超时即挂死上界（#71 遗留缺陷池——10s 默认下 NAK 盘每发一条
-    // CDB 冻结 UI 10s）；显式 0 = 恢复端口默认 10s
+    // CDB 冻结 UI 10s）。显式 0 同样回落本通道默认 3s（IChannel 契约"0=用实现
+    // 默认"；#72 残余埋雷——旧实现 0→端口默认 10s，与其余三通道口径不一致，
+    // 调用方按契约传 0 会静默丢掉 UI 线程上界）
     void set_read_timeout(unsigned ms) noexcept override {
-        m_timeout_s = ms ? (ms + 999u) / 1000u : 0u;
+        if (ms == 0) {
+            m_timeout_s = kDefaultTimeoutS;
+            return;
+        }
+        // 64 位中间量防 unsigned 回绕（对抗复核 1a：ms 近 UINT_MAX 时 ms+999 回绕
+        // 为小值 →m_timeout_s=0→端口默认 10s，同一埋雷的残余引信）；大值诚实
+        // 放大不截断，结果恒 <UINT_MAX
+        const unsigned long long s = (static_cast<unsigned long long>(ms) + 999ULL) / 1000ULL;
+        m_timeout_s = static_cast<unsigned>(s);
     }
     const ChannelDesc& desc() const noexcept override { return m_desc; }
     ChannelStats stats() const noexcept override {
@@ -237,7 +247,8 @@ private:
     std::wstring m_path;
     unsigned m_index = 0;
     unsigned m_block = 0;          // READ_CAPACITY 块大小（0=未知）
-    unsigned m_timeout_s = 3;      // 默认有界 3s（UI 线程 send 上界）；0=端口默认 10s
+    static constexpr unsigned kDefaultTimeoutS = 3; // 默认有界 3s（UI 线程 send 上界）
+    unsigned m_timeout_s = kDefaultTimeoutS;
     static constexpr unsigned kProbeTimeoutS = 3;   // open 时的容量/INQUIRY 探测同界
     PortT m_port;
     mutable std::mutex m_mtx;      // 保护 m_stats / m_cb

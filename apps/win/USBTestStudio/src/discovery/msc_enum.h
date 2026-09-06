@@ -25,11 +25,17 @@ inline ConsoleDevice make_device(unsigned index, const std::wstring& identity) {
     return d;
 }
 
-// 扫描本机 USB 大容量盘（无 U 盘机器上空表，同样绿）。
-inline std::vector<ConsoleDevice> scan(std::wstring* err = nullptr) {
+// 扫描探测超时（秒，evolve #73）：旧实现走端口默认 10s——扫描虽在后台线程不
+// 冻结 UI，但病态盘 ×10 轮最坏可拖满分钟级且无取消；3s 与 MscChannel open
+// 探测同界。有界性与失败可见性由 discovery_selftest 以假件钉住（对抗复核 2a/2c）
+inline constexpr unsigned kScanTimeoutS = 3;
+
+// 扫描内核（模板化 PortT 以便离线自测注入假件；产线形态即 MscScsi）
+template <typename PortT = MscScsi>
+std::vector<ConsoleDevice> scan_impl(std::wstring* err = nullptr) {
     std::vector<ConsoleDevice> out;
     for (unsigned i = 0; i < 10; ++i) {
-        MscScsi probe;
+        PortT probe;
         if (!probe.open_physical_drive(i, /*write_access=*/false, nullptr)) continue;
         bool usb = false;
         std::wstring e;
@@ -40,9 +46,15 @@ inline std::vector<ConsoleDevice> scan(std::wstring* err = nullptr) {
         if (!usb) continue;                      // 非 USB 盘（系统盘等）静默跳过
         unsigned long long sectors = 0;
         unsigned blk = 0;
-        if (!probe.read_capacity(&sectors, &blk, nullptr)) continue;   // 无介质/不响应
+        if (!probe.read_capacity(&sectors, &blk, &e, kScanTimeoutS)) {
+            // 探测失败/超时可见（对抗复核 2c：休眠待起转的慢盘从目录消失时留线索，
+            // 而非无声少一行）
+            if (err && err->empty())
+                *err = wraii::fmt_v(L"PhysicalDrive%u 探测失败/超时: %s", i, e.c_str());
+            continue;                            // 无介质/不响应
+        }
         std::string v8, p16, r4;
-        probe.scsi_inquiry(&v8, &p16, &r4, nullptr, nullptr);          // 尽力而为
+        probe.scsi_inquiry(&v8, &p16, &r4, nullptr, nullptr, kScanTimeoutS);   // 尽力而为
         std::wstring id;
         for (unsigned char c : v8)
             if (c) id.push_back(wchar_t(c));
@@ -54,6 +66,11 @@ inline std::vector<ConsoleDevice> scan(std::wstring* err = nullptr) {
         out.push_back(make_device(i, id));
     }
     return out;
+}
+
+// 扫描本机 USB 大容量盘（无 U 盘机器上空表，同样绿）
+inline std::vector<ConsoleDevice> scan(std::wstring* err = nullptr) {
+    return scan_impl<MscScsi>(err);
 }
 
 } // namespace msc_enum

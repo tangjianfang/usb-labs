@@ -36,6 +36,48 @@ static std::vector<ConsoleDevice> fixture() {
     };
 }
 
+// MSC 扫描假件（与 MscScsi 同名成员子集，evolve #73）：按盘号注入各分支——
+// 0~4/9 正常入列、5 容量探测失败/超时、6 非 USB 静默跳过、7 打开失败静默跳过、
+// 8 属性查询失败。记录探测超时秒数供断言（kScanTimeoutS 有界钉，对抗复核 2a）
+static unsigned g_cap_timeout_s = 0, g_inq_timeout_s = 0;
+class MockScanPort {
+public:
+    bool open_physical_drive(unsigned index, bool, std::wstring*) {
+        m_index = index;
+        return index != 7;                       // 7 号盘：打开失败
+    }
+    bool bus_is_usb(bool* is_usb, std::wstring* err) {
+        if (m_index == 8) {                      // 8 号盘：属性查询失败
+            if (err) *err = L"模拟属性查询失败";
+            return false;
+        }
+        *is_usb = m_index != 6;                  // 6 号盘：系统盘（非 USB）
+        return true;
+    }
+    bool read_capacity(unsigned long long* total, unsigned* blk, std::wstring* err,
+                       unsigned timeout_s = 0) {
+        g_cap_timeout_s = timeout_s;
+        if (m_index == 5) {                      // 5 号盘：探测失败/超时（可见性 2c）
+            if (err) *err = L"模拟探测超时";
+            return false;
+        }
+        *total = 15667200;
+        *blk = 512;
+        return true;
+    }
+    bool scsi_inquiry(std::string* v, std::string* p, std::string* r, unsigned char*,
+                      std::wstring*, unsigned timeout_s = 0) {
+        g_inq_timeout_s = timeout_s;
+        *v = "MOCKLAB";
+        *p = "UDISK-S";
+        *r = "1.0";
+        return true;
+    }
+
+private:
+    unsigned m_index = 0;
+};
+
 int wmain() {
     const auto devs = fixture();
 
@@ -124,6 +166,25 @@ int wmain() {
             || m.path.rfind(L"\\\\.\\PhysicalDrive", 0) != 0)
             msc_form = false;
     check(msc_form, "MSC 扫描行均具形态");
+
+    // ---- MSC 扫描内核（假件注入：探测有界 + 失败可见性，evolve #73） ----
+    err.clear();
+    auto mock_rows = msc_enum::scan_impl<MockScanPort>(&err);
+    check(mock_rows.size() == 6, "MSC 假件扫描 10 盘收敛 6 行（5/6/7/8 号各按因跳过）");
+    bool mock_form = true;
+    for (const auto& m : mock_rows)
+        if (m.kind != DeviceKind::msc
+            || m.path.rfind(L"\\\\.\\PhysicalDrive", 0) != 0)
+            mock_form = false;
+    check(mock_form && mock_rows.back().path == L"\\\\.\\PhysicalDrive9",
+          "MSC 假件行具形态且含 9 号尾盘");
+    check(mock_rows[0].name.find(L"MOCKLAB UDISK-S") != std::wstring::npos,
+          "MSC 假件行带 INQUIRY 身份");
+    check(g_cap_timeout_s == 3 && g_inq_timeout_s == 3,
+          "MSC 扫描容量/INQUIRY 探测同界 3s 有界（不回落端口 10s）");
+    check(err.find(L"PhysicalDrive5") != std::wstring::npos
+              && err.find(L"超时") != std::wstring::npos,
+          "MSC 探测失败/超时留痕于 err（慢盘消失可溯，不无声少行）");
 
     // ---- DeviceInfo → 目录条目（catalog_build，S2 后半） ----
     DeviceInfo di_hid;

@@ -164,7 +164,7 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 | 17 | `WinUsb_Initialize` 接受 `GUID_DEVINTERFACE_USB_DEVICE` 接口路径 | EP-4 S5 目录 usb 行→通道 | 目录用 USB 设备节点接口路径（libusb 同口径）开 WinUSB；非 WinUSB 驱动设备的失败码区分需真机核对 |
 | 18 | `CreateFileW(\\.\PhysicalDriveN, GENERIC_READ)` 无管理员权限行为 | EP-4 S5 MSC 目录扫描/会话 | 普通权限下打开可能失败（目录少一行/会话 open 报错）；扫描期 INQUIRY/READ_CAPACITY 对已挂载卷的副作用边界 |
 | 19 | `WinUsb_WritePipe` 超时后 `WinUsb_AbortPipe` 取消 | EP-4 S5 写路径有界等待（evolve #71） | OUT 传输被取消时设备侧可能已收部分字节（帧不完整、上层按失败处理）；超时判定与中止生效间的完成竞态（代码已按 GOR 结果兜底，需真机证实）；AbortPipe 本身失败时 `GetOverlappedResult(bWait=TRUE)` 理论可无限等待（回收路径返值未设防，低概率）；3s 默认对慢设备（Flash 缓冲写）是否偏紧 |
-| 20 | `WriteFile`（HID 输出报告）+ `CancelIoEx` 超时回收 | EP-4 HID 写路径有界等待（evolve #72） | 集合无中断 OUT 管道/蓝牙 HID 时 `WriteFile` 的失败码口径（代码按"立即失败即回退 `HidD_SetOutputReport` 控制传输"处理，MSDN/hidapi 口径需真机证实）；超时判定与取消生效间的完成竞态（代码已按 GOR 结果兜底，口径同 #7/#16）；`CancelIoEx` 后 `GetOverlappedResult(bWait=TRUE)` 若驱动迟不兑现取消理论可无限等待（同 #19 低概率残留）；`HidD_SetOutputReport` 同步控制传输在主机栈的实际超时上界（不可取消、且失败后还会以临时同步句柄二次尝试——病态设备下该回退路径可远超 3s，UI 线程调用时为自认残留） |
+| 20 | `WriteFile`（HID 输出报告）+ `CancelIoEx` 超时回收 | EP-4 HID 写路径有界等待（evolve #72） | 集合无中断 OUT 管道/蓝牙 HID 时 `WriteFile` 的失败码口径（代码按"立即失败即回退 `HidD_SetOutputReport` 控制传输"处理，MSDN/hidapi 口径需真机证实）；超时判定与取消生效间的完成竞态（代码已按 GOR 结果兜底，口径同 #7/#16）；`CancelIoEx` 后 `GetOverlappedResult(bWait=TRUE)` 若驱动迟不兑现取消理论可无限等待（同 #19 低概率残留）；`HidD_SetOutputReport` 同步控制传输在主机栈的实际超时上界（不可取消；evolve #73 起仅瞬时失败 <1s 才以临时同步句柄二次尝试，慢失败不重试——残余为单次控制传输本身的主机栈上界，病态设备下仍可能超 3s） |
 | 21 | MSC 会话 3s 默认直通超时（`SCSI_PASS_THROUGH_DIRECT.TimeOutValue`） | EP-4 MSC 会话 send/open 有界（evolve #72） | 3s 对慢速盘（螺旋 HDD 冷启动/大块 READ10）是否偏紧；超时后设备侧命令可能仍在执行——重发同命令的副作用边界（只读通道影响有限） |
 
 ## 9. 文件结构
@@ -191,7 +191,8 @@ USBTestStudio/
     │                             为纯逻辑；CHECK CONDITION 以 SENSE 帧呈现；只读拒写，模板化同上）
     ├── discovery/device_catalog.h EP-4 S2 目录条目+即时过滤（多关键词 AND/kind 掩码，纯逻辑）
     ├── discovery/serial_enum.h   COM 口枚举（SERIALCOMM 注册表，数字序排序）
-    ├── discovery/msc_enum.h      EP-4 S5 USB 大容量盘目录行（PhysicalDrive0..9 BusTypeUsb 过滤）
+    ├── discovery/msc_enum.h      EP-4 S5 USB 大容量盘目录行（PhysicalDrive0..9 BusTypeUsb 过滤；
+    │                             探测 3s 有界+失败留痕，扫描内核模板化可注假件自测，evolve #73）
     ├── discovery/catalog_build.h EP-4 S2/S5 目录组装（DeviceInfo+MSC+COM 合流）+ 会话工厂（四通道→IChannel）
     ├── session/session_codec.h  EP-4 S3 收发编解码（发送框智能识别/双视图/时间戳行，纯逻辑）
     ├── session/session_core.h   EP-4 S3 会话核心（帧日志/发送历史/周期节拍/时间基准，纯逻辑）

@@ -29,6 +29,17 @@ struct HidCapsInfo {
     std::wstring product;            // HidD_GetProductString（best-effort）
 };
 
+// ---------------------------------------------------------------------------
+// 回退路径二次尝试策略（纯逻辑，离线自测钉住，evolve #73）：
+// HidD_SetOutputReport 在重叠句柄上的兼容失败（句柄组合不配——瞬时失败）才值得
+// 以“临时同步句柄”再试一次；首次调用已耗时 ≥1s 的失败说明传输实际到达过设备
+//（病态设备 NAK/STALL 控制传输），换句柄重发同一报告不带来新信息，只会把
+// UI 线程 send 的等待上界再放大一段不受控时间（#72 残余缺陷：二次尝试叠加）。
+constexpr unsigned long long kHidSyncRetryFastMs = 1000;
+inline bool hid_sync_retry_allowed(unsigned long long first_elapsed_ms) {
+    return first_elapsed_ms < kHidSyncRetryFastMs;
+}
+
 class HidPort {
 public:
     // 打开设备并填充 caps。先试 GENERIC_READ|GENERIC_WRITE，失败回退 GENERIC_READ（hidapi 同口径）。
@@ -50,7 +61,8 @@ public:
     // 完成时，按失败重发会使设备收重复命令）。WriteFile 立即失败（集合无中断 OUT
     // 管道/蓝牙 HID 传输栈等不支持该写路径，MSDN/hidapi 口径）时回退
     // HidD_SetOutputReport 控制传输（同步、不可取消，受主机栈控制传输超时约束），
-    // 重叠句柄上再失败则内部回退“临时同步句柄”重试（见 README 不确定点）。
+    // 重叠句柄上再失败则内部回退“临时同步句柄”重试——仅瞬时失败重试（策略见
+    // hid_sync_retry_allowed，README 不确定点）。
     bool set_output_report(const uint8_t* data, size_t len, std::wstring* err = nullptr,
                            unsigned timeout_ms = 3000);
 
@@ -60,7 +72,7 @@ public:
 private:
     bool fill_caps(std::wstring* err);
     // set_output_report 的回退路径：HidD_SetOutputReport（同步控制传输），
-    // 重叠句柄上失败后以“临时同步句柄”再试一次
+    // 重叠句柄上瞬时失败后以“临时同步句柄”再试一次（慢失败不重试）
     bool set_output_report_sync(std::vector<uint8_t>& buf, std::wstring* err);
 
     wraii::uhandle<wraii::handle_closer> m_handle;
