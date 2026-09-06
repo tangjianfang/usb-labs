@@ -43,10 +43,11 @@ if(MSVC)
     )
 endif()
 
-# EP-4 S1 通道层离线自测（控制台；MockEchoPort 注入模板 + SerialPort 显式实例化）
+# EP-4 S1 通道层离线自测（控制台；MockEchoPort/MockHidPort 注入模板 + SerialPort/HidPort 显式实例化）
 add_executable(channel_selftest
     src/app/channel_selftest.cpp
     src/framework/win32_rai.cpp
+    src/usb/hid_port.cpp
     src/usb/serial_port.cpp
 )
 target_include_directories(channel_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

@@ -167,6 +167,9 @@ USBTestStudio/
     ├── usb/hid_port.*            HID caps / 重叠读 / 输出报告 / QPC 回报率直方图
     ├── usb/serial_port.*         DCB / 重叠读写 / 环回 / PD 遥测（key=value）
     ├── usb/msc_scsi.*            SCSI 直通 INQUIRY/READ_CAPACITY/READ10 + sense（只读）
+    ├── channel/channel.h         EP-4 会话台统一通道契约 IChannel（open/send/on_receive/stats）
+    ├── channel/serial_channel.h  IChannel 串口实现（模板化 PortT，可注入假件自测）
+    ├── channel/hid_channel.h     IChannel HID 实现（Report ID 透传，模板化同上）
     ├── engine/test_engine.*      计划加载、步骤分发、判定、JSON 报告、事件泵
     └── ui/log_view.* / main_window.*   RichEdit 日志 / 主窗口（DPI、快捷键、布局）
 ```
