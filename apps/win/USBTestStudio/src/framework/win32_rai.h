@@ -9,6 +9,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <setupapi.h>   // HDEVINFO / SetupDi*（RAII closer 需要）
 
 #include <cstdarg>
 #include <cstdint>

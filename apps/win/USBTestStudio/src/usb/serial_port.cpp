@@ -96,8 +96,9 @@ bool SerialPort::overlapped_xfer(bool write, void* buf, DWORD len, DWORD* done,
     }
     wraii::uhandle<wraii::handle_closer> evt(ov.hEvent);
 
-    BOOL ok = write ? ::WriteFile(m_handle.get(), buf, len, nullptr, &ov)
-                    ::ReadFile(m_handle.get(), buf, len, nullptr, &ov);
+    BOOL ok = FALSE;
+    if (write) ok = ::WriteFile(m_handle.get(), buf, len, nullptr, &ov);
+    else       ok = ::ReadFile(m_handle.get(), buf, len, nullptr, &ov);
     if (!ok) {
         DWORD e = ::GetLastError();
         if (e != ERROR_IO_PENDING) {

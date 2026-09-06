@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 # 本地规范缓存（如有）不入公开库
 specs_local/
+
+# Windows 构建产物
+apps/win/build/

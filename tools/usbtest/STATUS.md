@@ -47,3 +47,10 @@ vbus_v=9.02                  # VBUS 实测（固件 ADC）
 2. U 盘/读卡器：msc_inquiry/capacity（只读安全）→ write_verify（破坏性，最后）；
 3. PD：先完成 Lab5 遥测契约固件，再跑三处理器；
 4. 每过一项：更新本表该行为 ✅+设备名+日期，并 git 提交。
+
+## 五、原生上位机（apps/）构建状态
+
+| 平台 | 编译 | 真机联调 |
+|---|---|---|
+| Windows USBTestStudio（Win32/C++20） | ✅ MSVC 14.51 (VS 18) Release 编译链接通过 + 冒烟运行（2026-09-05） | 待真机（插 DUT 后按 README 联调步骤） |
+| macOS USBTestStudio（Swift/AppKit） | ⏸ 挂起（本机无 macOS/Xcode，源码就绪） | ⏸ |

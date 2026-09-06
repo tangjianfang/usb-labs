@@ -6,6 +6,7 @@
 
 #include "framework/win32_rai.h"
 
+#include <initguid.h>   // DEVPKEY_* 常量在本 TU 实例化（必须先于 devpropdef/cfgmgr32）
 #include <cfgmgr32.h>
 #include <devpkey.h>
 #include <hidsdi.h>

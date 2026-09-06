@@ -440,10 +440,8 @@ void MainWindow::fill_steps_table(const std::wstring& pending_text) {
 void MainWindow::do_run() {
     if (m_running.load()) return;
     if (!try_load_plan(true)) {
-        ::MessageBoxW(m_hwnd,
-                      (L"未找到测试计划：\n" + m_planPath +
-                       L"\n\n请将 plan.json 放在 exe 同目录，或用 --plan <路径> 指定。"),
-                      L"USBTestStudio", MB_ICONWARNING);
+        { const std::wstring msg_ = L"未找到测试计划：\n" + m_planPath +
+                       L"\n\n请将 plan.json 放在 exe 同目录，或用 --plan <路径> 指定。"; ::MessageBoxW(m_hwnd, msg_.c_str(), L"USBTestStudio", MB_ICONWARNING); }
         return;
     }
     fill_steps_table(L"…");

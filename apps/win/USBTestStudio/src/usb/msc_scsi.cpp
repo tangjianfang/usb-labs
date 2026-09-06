@@ -83,7 +83,8 @@ int MscScsi::auto_detect_usb_drive() {
         if (!probe.bus_is_usb(&usb) || !usb) continue;
         unsigned long long total = 0;
         unsigned blk = 0;
-        if (probe.read_capacity(&total, &blk) && blk > 0) return static_cast<int>(i);
+        std::wstring cap_err;
+        if (probe.read_capacity(&total, &blk, &cap_err) && blk > 0) return static_cast<int>(i);
     }
     return -1;
 }
