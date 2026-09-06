@@ -1,10 +1,13 @@
 // channel_selftest.cpp — EP-4 S1 通道层离线自测（无真机即可跑）：
-// 1) 显式实例化 SerialChannelT<SerialPort> / HidChannelT<HidPort>，保证产线形态整体编译；
-// 2) MockEchoPort / MockHidPort（回显假件）注入模板，验证读线程/回调/统计/关闭等
-//    会话契约——即设计 §3 "调试台与产测引擎共用同一套通道" 的行为面。
-// 真机收发验收（S1 验收口径）仍按切片表在真机上执行。
+// 1) 显式实例化 SerialChannelT<SerialPort> / HidChannelT<HidPort> /
+//    WinUsbChannelT<WinUsbPort>，保证产线形态整体编译；
+// 2) MockEchoPort / MockHidPort / MockWinUsbPort（回显假件）注入模板，验证读线程/
+//    回调/统计/关闭等会话契约——即设计 §3 "调试台与产测引擎共用同一套通道" 的行为面；
+// 3) WinUsbPort 纯逻辑（路径 VID/PID 解析、数据管道选型）直接离线验证。
+// 真机收发验收（S1/S5 验收口径）仍按切片表在真机上执行。
 #include "channel/hid_channel.h"
 #include "channel/serial_channel.h"
+#include "channel/winusb_channel.h"
 
 #include <windows.h>
 
@@ -123,9 +126,65 @@ private:
     std::atomic<bool> m_open{false};     // 读线程读 / 调用方写
 };
 
+// 回显假件（WinUSB 形态）：与 WinUsbPort 同名成员子集（open/close/is_open/caps/
+// read_pipe/write_pipe）。write_pipe 把整个 OUT 传输作为一帧 IN 传输入队——模拟
+// "收到什么批量 OUT 就回什么批量 IN" 的工装固件（IN 传输口径=整帧）。
+class MockWinUsbPort {
+public:
+    bool open(const std::wstring& path, std::wstring* err) {
+        if (fail_open) { if (err) *err = L"模拟打开失败"; return false; }
+        m_path = path;
+        WinUsbPort::parse_vid_pid(path, &m_caps.vid, &m_caps.pid);   // 复用真件纯逻辑
+        m_open = true;
+        std::lock_guard<std::mutex> g(m_mtx); m_queue.clear();
+        return true;
+    }
+    void close() noexcept { m_open = false; }
+    bool is_open() const noexcept { return m_open.load(); }
+    const WinUsbCaps& caps() const noexcept { return m_caps; }
+
+    bool read_pipe(std::vector<uint8_t>& buf, unsigned timeout_ms, bool* timed_out,
+                   std::wstring* = nullptr) {
+        *timed_out = false;
+        if (!m_open || fail_read || m_caps.in_pipe == 0) return false;   // 非超时错误：读线程退出
+        std::unique_lock<std::mutex> g(m_mtx);
+        if (m_queue.empty()) {
+            g.unlock();
+            Sleep(5);                                   // 模拟阻塞轮片，避免测试期热转
+            *timed_out = true;                          // 轮空：读线程继续
+            return false;
+        }
+        buf = std::move(m_queue.front());
+        m_queue.erase(m_queue.begin());
+        (void)timeout_ms;
+        return true;
+    }
+
+    bool write_pipe(const uint8_t* data, size_t len, std::wstring* err) {
+        if (!m_open) { if (err) *err = L"WinUSB 未打开"; return false; }
+        if (m_caps.out_pipe == 0) { if (err) *err = L"无数据 OUT 管道（只读设备）"; return false; }
+        if (!echo_output) return true;
+        std::lock_guard<std::mutex> g(m_mtx);
+        m_queue.emplace_back(data, data + len);
+        return true;
+    }
+
+    bool fail_open = false;
+    bool fail_read = false;              // 模拟设备拔出：读线程应退出
+    bool echo_output = true;
+    std::wstring m_path;
+    WinUsbCaps m_caps;                   // 测试预置管道选型（真件由 open 时的 query_pipes 填充）
+
+private:
+    mutable std::mutex m_mtx;
+    std::vector<std::vector<uint8_t>> m_queue;
+    std::atomic<bool> m_open{false};     // 读线程读 / 调用方写
+};
+
 // 强制编译产线实例的全部成员（不运行）
 template class SerialChannelT<SerialPort>;
 template class HidChannelT<HidPort>;
+template class WinUsbChannelT<WinUsbPort>;
 
 static int g_pass = 0;
 static void check(bool ok, const char* what) {
@@ -341,6 +400,185 @@ int wmain() {
         ch.set_read_timeout(0);                          // 打开态改超时
         Sleep(120);
     }   // 析构（读线程在跑）——验证 ~HidChannelT 不挂死
+    // ============ WinUsbPort 纯逻辑（EP-4 S5 前半） ============
+    {   // 路径 VID/PID 解析：大小写不敏感、1~4 位十六进制、缺失置 0
+        unsigned v = 9, p = 9;
+        WinUsbPort::parse_vid_pid(
+            L"\\\\?\\usb#vid_1234&pid_00ab#6&1f2e3d4&0&1#{a5dcbf10-6530-11d2-901f-00c0047959a1}",
+            &v, &p);
+        check(v == 0x1234 && p == 0x00AB, "parse_vid_pid 小写全4位");
+        WinUsbPort::parse_vid_pid(L"\\\\?\\usb#VID_1A2&PID_B#x", &v, &p);
+        check(v == 0x1A2 && p == 0xB, "parse_vid_pid 大写短位");
+        WinUsbPort::parse_vid_pid(L"\\\\?\\hid#vid_1234#x", &v, &p);
+        check(v == 0 && p == 0, "parse_vid_pid 无 pid 置 0");
+    }
+    {   // 数据管道选型：批量优先、中断回退、同型取编号最小、只出不进
+        auto mk = [](unsigned char id, bool in, bool bulk) {
+            WinUsbPipeInfo pi;
+            pi.id = id;
+            pi.is_in = in;
+            pi.is_bulk = bulk;
+            return pi;
+        };
+        unsigned char in_id = 0, out_id = 0;
+        bool in_bulk = false, out_bulk = false;
+        auto sel = [&](const std::vector<WinUsbPipeInfo>& ps) {
+            return WinUsbPort::select_data_pipes(ps, &in_id, &in_bulk, &out_id, &out_bulk);
+        };
+        check(sel({mk(0x81, true, true), mk(0x01, false, true)}) && in_id == 0x81 &&
+                  out_id == 0x01 && in_bulk && out_bulk,
+              "选型：批量 IN+OUT");
+        check(sel({mk(0x81, true, false), mk(0x02, false, false)}) && !in_bulk && !out_bulk &&
+                  out_id == 0x02,
+              "选型：中断回退");
+        check(sel({mk(0x81, true, true), mk(0x01, false, false), mk(0x86, true, false)}) &&
+                  in_id == 0x81 && in_bulk && out_id == 0x01 && !out_bulk,
+              "选型：混合批量IN+中断OUT");
+        check(sel({mk(0x84, true, true), mk(0x82, true, true)}) && in_id == 0x82 && out_id == 0,
+              "选型：同型取编号最小 / 只出不进 OUT=0");
+        check(sel({}) == false, "选型：空管道表 false");
+        in_id = 1;   // 上一轮残留应被重置
+        check(sel({mk(0x01, false, true)}) == false && in_id == 0 && out_id == 0x01,
+              "选型：只进不出 IN=0");
+    }
+
+    // ============ WinUsbChannel（EP-4 S5 前半） ============
+    using TestUsb = WinUsbChannelT<MockWinUsbPort>;
+    const std::wstring kUsbPath =
+        L"\\\\?\\usb#vid_1234&pid_00ab#6&1f2e3d4&0&1#{a5dcbf10-6530-11d2-901f-00c0047959a1}";
+
+    {   // 契约：未开即关 + 未开即发
+        TestUsb ch(kUsbPath);
+        check(!ch.is_open(), "WinUSB 初始未打开");
+        check(ch.desc().kind.empty(), "WinUSB 未打开无描述");
+        std::wstring err;
+        const uint8_t b[] = {0xAA};
+        check(!ch.send(b, sizeof b, &err), "WinUSB 未打开 send 失败");
+        ch.close();                                     // 未开即关不崩溃
+    }
+    {   // 打开失败 → err 非空、仍处于关闭
+        TestUsb ch(kUsbPath);
+        ch.port().fail_open = true;
+        std::wstring err;
+        check(!ch.open(&err), "WinUSB open 失败返回 false");
+        check(!err.empty(), "WinUSB open 失败给出 err");
+        check(!ch.is_open(), "WinUSB 失败后未打开");
+    }
+    {   // 回显会话：描述（VID:PID 自路径解析+管道型别）、整传输一帧、统计、清回调
+        TestUsb ch(kUsbPath);
+        ch.port().m_caps.in_pipe = 0x81;
+        ch.port().m_caps.in_is_bulk = true;
+        ch.port().m_caps.out_pipe = 0x01;
+        ch.port().m_caps.out_is_bulk = true;
+        std::wstring err;
+        check(ch.open(&err), "WinUSB open 成功");
+        check(ch.desc().kind == L"usb", "WinUSB kind=usb");
+        check(ch.desc().display ==
+                  L"WinUSB 1234:00AB IN 0x81(bulk) OUT 0x01(bulk)", "WinUSB display 文本");
+        check(ch.desc().path == kUsbPath, "WinUSB desc.path");
+
+        std::mutex cb_mtx;
+        std::vector<std::vector<uint8_t>> frames;
+        ch.set_receive_callback([&](const std::vector<uint8_t>& b) {
+            std::lock_guard<std::mutex> g(cb_mtx);
+            frames.push_back(b);
+        });
+
+        const uint8_t pkt1[] = {0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};   // 8 字节传输
+        check(ch.send(pkt1, sizeof pkt1, &err), "WinUSB send-1 成功");
+        check(wait_for([&] {
+            std::lock_guard<std::mutex> g(cb_mtx);
+            return frames.size() >= 1 &&
+                   frames[0] == std::vector<uint8_t>(pkt1, pkt1 + 8);
+        }), "WinUSB 回显帧=整传输一帧");
+        auto st = ch.stats();
+        check(st.tx_frames == 1 && st.tx_bytes == 8 && st.rx_frames == 1 && st.rx_bytes == 8,
+              "WinUSB tx/rx 统计");
+
+        ch.set_receive_callback(nullptr);               // 清回调后不再投递
+        Sleep(150);
+        size_t n_at_clear = frames.size();
+        const uint8_t pkt2[] = {0x5A};
+        check(ch.send(pkt2, sizeof pkt2, &err), "WinUSB 清回调后 send");
+        check(wait_for([&] { return ch.stats().rx_bytes == 9; }), "WinUSB 清回调后仍有 rx 统计");
+        Sleep(150);
+        {
+            std::lock_guard<std::mutex> g(cb_mtx);
+            check(frames.size() == n_at_clear, "WinUSB 清回调后不再调用");
+        }
+
+        ch.close();
+        check(!ch.is_open(), "WinUSB close 后未打开");
+    }
+    {   // 只读设备（无 OUT 管道）：open 成功，send 拒绝并给出 err，统计不动
+        TestUsb ch(kUsbPath);
+        ch.port().m_caps.in_pipe = 0x81;
+        ch.port().m_caps.in_is_bulk = true;
+        ch.port().m_caps.out_pipe = 0;
+        std::wstring err;
+        check(ch.open(&err), "只读设备 open 成功");
+        const uint8_t b[] = {0x01};
+        check(!ch.send(b, sizeof b, &err), "无 OUT 管道 send 拒绝");
+        check(!err.empty(), "无 OUT 管道 send 给出 err");
+        check(ch.stats().tx_frames == 0, "拒绝的 send 不计统计");
+        ch.close();
+    }
+    {   // 只出不进设备（无 IN 管道）：open 成功且不起读线程，send 正常
+        TestUsb ch(kUsbPath);
+        ch.port().m_caps.in_pipe = 0;
+        ch.port().m_caps.out_pipe = 0x01;
+        ch.port().m_caps.out_is_bulk = true;
+        std::wstring err;
+        check(ch.open(&err), "只出不进 open 成功");
+        const uint8_t b[] = {0x01, 0x02};
+        check(ch.send(b, sizeof b, &err), "只出不进 send 成功");
+        Sleep(120);                                     // 若误起读线程，read_pipe 立即报错退出
+        check(ch.is_open(), "只出不进通道保持打开");
+        ch.close();
+    }
+    {   // 拔出模拟：读线程退出；send 写路径独立仍成功；句柄未关仍报 is_open
+        TestUsb ch(kUsbPath);
+        ch.port().m_caps.in_pipe = 0x81;
+        ch.port().m_caps.in_is_bulk = true;
+        ch.port().m_caps.out_pipe = 0x01;
+        ch.port().m_caps.out_is_bulk = true;
+        std::wstring err;
+        check(ch.open(&err), "拔出模拟 open");
+        ch.port().fail_read = true;                     // 下一轮读即"设备拔出"
+        Sleep(150);                                     // 等读线程退出
+        const uint8_t b[] = {0x00, 0x01};
+        check(ch.send(b, sizeof b, &err), "WinUSB 拔出后 send（写路径独立）仍成功");
+        Sleep(150);
+        check(ch.stats().rx_frames == 0 && ch.stats().rx_bytes == 0,
+              "WinUSB 读线程退出后无 rx");
+        check(ch.is_open(), "WinUSB 通道仍报 is_open（句柄未关）");
+    }
+    {   // 重开：close → open 复用同一通道对象
+        TestUsb ch(kUsbPath);
+        ch.port().m_caps.in_pipe = 0x81;
+        ch.port().m_caps.out_pipe = 0x01;
+        ch.port().m_caps.out_is_bulk = true;
+        std::wstring err;
+        check(ch.open(&err), "WinUSB 重开第一次 open");
+        const uint8_t b[] = {0x01, 0x02};
+        check(ch.send(b, sizeof b, &err), "WinUSB 重开第一次 send");
+        check(wait_for([&] { return ch.stats().rx_frames >= 1; }), "WinUSB 重开第一次回读");
+        ch.close();
+        check(ch.open(&err), "WinUSB 重开第二次 open");
+        check(ch.send(b, sizeof b, &err), "WinUSB 重开第二次 send");
+        check(wait_for([&] { return ch.stats().rx_frames >= 2; }), "WinUSB 重开第二次回读");
+    }
+    {   // set_read_timeout(0) 回退默认值不崩溃 + 析构路径
+        TestUsb ch(kUsbPath);
+        ch.port().m_caps.in_pipe = 0x81;
+        ch.port().m_caps.out_pipe = 0x01;
+        ch.set_read_timeout(0);
+        std::wstring err;
+        check(ch.open(&err), "WinUSB 短超时 open");
+        ch.set_read_timeout(0);                         // 打开态改超时
+        Sleep(120);
+    }   // 析构（读线程在跑）——验证 ~WinUsbChannelT 不挂死
+
     printf("channel_selftest: %d/%d PASS\n", g_pass, g_pass);
     return 0;
 }

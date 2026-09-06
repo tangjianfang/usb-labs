@@ -124,7 +124,8 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 引擎（jthread）TestEngine：计划解析 → 步骤分发 → 判定 → 报告写盘
                 ▼ 调用
 设备访问层     DeviceEnumerator(SetupDi/CfgMgr32) · HidPort(hid.dll+重叠I/O)
-               SerialPort(\\.\COMx+DCB) · MscScsi(IOCTL_SCSI_PASS_THROUGH_DIRECT)
+               SerialPort(\\.\COMx+DCB) · WinUsbPort(winusb.dll+批量/中断管道选型)
+               MscScsi(IOCTL_SCSI_PASS_THROUGH_DIRECT)
 ```
 扫描在独立的短生命周期线程执行（SetupDi 枚举 + PostMessage 回窗）。UI 侧在 `WM_APP+2/3` 中以 `unique_ptr` 接管并释放 payload。
 
@@ -156,6 +157,8 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 | 12 | `GetDpiForWindow` / `WM_DPICHANGED` | PerMonitorV2 | 最低系统 Win10 1607；`HIWORD(wParam)` 取 DPI、`lParam` 建议矩形用法 |
 | 13 | RichEdit `MSFTEDIT_CLASS`("RICHEDIT50W") + `EM_SETCHARFORMAT` | 日志视图 | `SCF_SELECTION` 对“随后插入文本”的格式继承；`EM_EXLIMITTEXT` 上限；`EM_LINEINDEX` 裁剪序列 |
 | 14 | `PostMessage` 跨线程堆指针 payload | 引擎→UI 封送 | WPARAM/LPARAM 在 64 位下的截断（代码按 `INT_PTR`/指针尺寸传递，需复核） |
+| 15 | `WinUsb_Initialize` 前置与 `FILE_FLAG_OVERLAPPED` | WinUSB 批量管道（EP-4 S5） | 须以读写+重叠标志 CreateFile；未绑 WinUSB 驱动的设备返回失败码的区分 |
+| 16 | `WinUsb_ReadPipe` + `WinUsb_AbortPipe` 超时回收 | WinUSB 读轮片 | 取消在途传输后 `GetOverlappedResult(bWait=TRUE)` 的回收序列与 `ERROR_OPERATION_ABORTED` 竞态（口径同 HidPort） |
 
 ## 9. 文件结构
 
@@ -171,9 +174,12 @@ USBTestStudio/
     ├── usb/hid_port.*            HID caps / 重叠读 / 输出报告 / QPC 回报率直方图
     ├── usb/serial_port.*         DCB / 重叠读写 / 环回 / PD 遥测（key=value）
     ├── usb/msc_scsi.*            SCSI 直通 INQUIRY/READ_CAPACITY/READ10 + sense（只读）
+    ├── usb/winusb_port.*         EP-4 S5 WinUSB 批量/中断管道（接口 0 + 管道选型 + 重叠读写；
+    │                             VID/PID 路径解析与选型为纯逻辑，离线自测覆盖）
     ├── channel/channel.h         EP-4 会话台统一通道契约 IChannel（open/send/on_receive/stats）
     ├── channel/serial_channel.h  IChannel 串口实现（模板化 PortT，可注入假件自测）
     ├── channel/hid_channel.h     IChannel HID 实现（Report ID 透传，模板化同上）
+    ├── channel/winusb_channel.h  EP-4 S5 IChannel WinUSB 实现（IN 传输=帧，模板化同上）
     ├── discovery/device_catalog.h EP-4 S2 目录条目+即时过滤（多关键词 AND/kind 掩码，纯逻辑）
     ├── discovery/serial_enum.h   COM 口枚举（SERIALCOMM 注册表，数字序排序）
     ├── discovery/catalog_build.h EP-4 S2 目录组装（DeviceInfo+COM 合流）+ 会话工厂（→IChannel）
