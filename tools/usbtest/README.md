@@ -46,7 +46,8 @@ report: {json: reports/}
 
 - `type` 必须在各后端模块的 `HANDLERS` 中注册；
 - `limits` 与实测值比较，超出即 FAIL（Step 级 fail 不会中断整站，全部跑完再判定）；
-- **mock 模式**：`--mock` 用 `mock_test.py` 返回确定性通过——用于 CI 验证计划文件语法与报告链路。
+- **mock 模式**：`--mock` 用 `mock_test.py` 返回确定性通过——用于 CI 验证计划文件语法与报告链路；
+- **离线自测**：`python tools/usbtest/tests/test_msc.py`——MSC 容量/CDB 内核假件钉（>2TB RC10 哨兵→RC16、READ/WRITE(16) 高 LBA 选路、BOT 31 字节 CBW），与上位机 C++ 内核同口径（evolve #76）。
 
 ## 各实验室产测计划
 

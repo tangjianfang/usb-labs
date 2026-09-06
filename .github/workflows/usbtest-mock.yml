@@ -23,6 +23,8 @@ jobs:
             python -m usbtest --plan "$plan" --mock --report-dir /tmp/reports || fail=1
           done
           exit $fail
+      - name: MSC 参考实现离线自测
+        run: python tools/usbtest/tests/test_msc.py
       - name: usbsim 协议仿真器自测
         run: python simulator/tests/test_sim.py
       - name: 轻量校验（链接/围栏）
