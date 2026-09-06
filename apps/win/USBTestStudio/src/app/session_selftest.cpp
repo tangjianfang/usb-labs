@@ -2,9 +2,11 @@
 // session_codec（发送框智能识别 auto/hex/ascii 锁定、奇数位补前导 0、UTF-8
 // 编解码双视图、时间戳与行格式）与 session_core（周期节拍钳制/到期、发送
 // 历史游标语义、帧日志环形与清账、SessionCore 时间基准）的纯逻辑行为面。
-// 收发台 UI（标签页/发送框/接收区接线）是 S3 后半，随整片真机验收。
+// S3 后半 UI 接线（session_view 渲染游标在此覆盖；session_pane/console_window
+// 为纯 Win32 接线层，随整片真机验收）。
 #include "session/session_codec.h"
 #include "session/session_core.h"
+#include "session/session_view.h"
 
 #include <cstdio>
 #include <initializer_list>
@@ -255,6 +257,100 @@ int main() {
               "聚合: 行格式·相对+Hex");
         check(c.frame_line(c.journal.frames()[1], true, false) == L"1.600s IN  01 AB",
               "聚合: 行格式·相对+IN 对齐");
+    }
+
+    // —— RenderCursor 渲染游标（S3 后半：账面-显示解耦） ——
+    {   // 空账 poll → 空且游标不动
+        session_core::SessionCore c;
+        session_view::RenderCursor v;
+        check(v.poll(c).empty() && v.rendered() == 0, "游标: 空账 poll 空");
+    }
+    {   // 增量渲染：三帧 → 三行按序，重复 poll 无重复
+        session_core::SessionCore c;
+        c.set_time_base(0, 0);
+        session_view::RenderCursor v;
+        const uint8_t a[] = {0x01}, b[] = {0x42};
+        c.record_tx(a, 1, 10);
+        c.record_rx(b, 1, 20);
+        c.record_tx(a, 1, 30);
+        auto lines = v.poll(c);
+        check(lines.size() == 3 && v.rendered() == 3, "游标: 三帧一次出三行");
+        check(lines[0].rfind(L"10ms OUT ", 0) == 0 && lines[0].find(L"01") != std::wstring::npos,
+              "游标: 行=相对时间戳+OUT+Hex");
+        check(lines[1].find(L"IN  42") != std::wstring::npos, "游标: 顺序与方向保真");
+        check(v.poll(c).empty(), "游标: 已渲染不重发");
+    }
+    {   // 暂停游标停走，恢复一次补齐
+        session_core::SessionCore c;
+        c.set_time_base(0, 0);
+        session_view::RenderCursor v;
+        const uint8_t a[] = {0x00};
+        c.record_rx(a, 1, 5);
+        check(v.poll(c).size() == 1, "游标: 先渲染一帧");
+        v.set_paused(true);
+        c.record_rx(a, 1, 50);
+        c.record_rx(a, 1, 60);
+        check(v.poll(c).empty() && v.rendered() == 1, "游标: 暂停不渲染不推进");
+        v.set_paused(false);
+        auto lines = v.poll(c);
+        check(lines.size() == 2 && v.rendered() == 3, "游标: 恢复一次补齐两帧");
+    }
+    {   // 环形淘汰：未渲染帧在暂停期间滑出账面，恢复只补存活帧，计数仍在
+        session_core::SessionCore c;
+        c.set_time_base(0, 0);
+        session_view::RenderCursor v;
+        const uint8_t x[] = {0xEE};
+        c.journal = session_core::FrameJournal(4);   // 小账面逼出淘汰
+        for (int i = 0; i < 3; ++i) c.record_tx(x, 1, unsigned(i));
+        v.set_paused(true);                          // 暂停在渲染之前，游标=0
+        for (int i = 3; i < 6; ++i) c.record_tx(x, 1, unsigned(i));   // 总 6 存活 4
+        v.set_paused(false);
+        auto lines = v.poll(c);
+        check(lines.size() == 4 && v.rendered() == 6,
+              "游标: 最老 2 帧被淘汰不可见，恢复只补存活 4 帧而游标=总账");
+        check(c.journal.tx_frames() == 6, "游标: 淘汰帧计数不丢");
+    }
+    {   // journal 清屏（清显示不清账）后 poll 无可渲染，新帧照常出
+        session_core::SessionCore c;
+        c.set_time_base(0, 0);
+        session_view::RenderCursor v;
+        const uint8_t a[] = {0x01};
+        c.record_rx(a, 1, 1);
+        c.record_rx(a, 1, 2);
+        v.poll(c);
+        c.journal.clear();
+        check(v.poll(c).empty(), "游标: 账面显示存储清空后无增量");
+        c.record_rx(a, 1, 3);
+        auto lines = v.poll(c);
+        check(lines.size() == 1, "游标: 清屏后新帧照常渲染");
+    }
+    {   // rebuild：口径切换全量重渲染，游标推到最新，此后 poll 无新增
+        session_core::SessionCore c;
+        c.set_time_base(0, 43200000ULL);              // 锚定 12:00:00
+        session_view::RenderCursor v;              // 默认 Hex+相对
+        const uint8_t d[] = {'A', 0x01};
+        c.record_rx(d, 2, 1500);
+        v.poll(c);
+        v.hex_view = false;                           // 切 ASCII 视图
+        auto lines = v.rebuild(c);
+        check(lines.size() == 1 && lines[0].find(L"A.") != std::wstring::npos,
+              "游标: rebuild 按 ASCII 口径（0x01 不可打印→'.'）");
+        check(v.rendered() == 1 && v.poll(c).empty(), "游标: rebuild 后无重复增量");
+        v.absolute_ts = true;                         // 再切绝对时间戳
+        lines = v.rebuild(c);
+        check(lines.size() == 1 && lines[0].rfind(L"12:00:01.500", 0) == 0,
+              "游标: rebuild 按绝对时刻口径");
+    }
+    {   // 暂停中 rebuild：全量返回且游标推进，恢复后 poll 空
+        session_core::SessionCore c;
+        c.set_time_base(0, 0);
+        session_view::RenderCursor v;
+        const uint8_t a[] = {0x7F};
+        c.record_rx(a, 1, 1);
+        v.set_paused(true);
+        check(v.rebuild(c).size() == 1 && v.rendered() == 1, "游标: 暂停中 rebuild 照常全量");
+        v.set_paused(false);
+        check(v.poll(c).empty(), "游标: rebuild 已推进，恢复无补齐");
     }
 
     printf("session_selftest: %d/%d PASS\n", g_pass, g_pass);

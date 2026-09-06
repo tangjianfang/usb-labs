@@ -1,4 +1,5 @@
-// console_window.cpp — EP-4 S2 设备发现窗口实现。未真机编译，按 MSDN 口径编写。
+// console_window.cpp — EP-4 通信控制台窗口实现（上区 S2 设备发现 + 下区 S3 会话
+// 标签台）。未真机编译，按 MSDN 口径编写。
 #include "ui/console_window.h"
 
 #include "discovery/catalog_build.h"
@@ -13,7 +14,7 @@
 namespace {
 
 constexpr wchar_t kClassName[] = L"USBTestStudio_ConsoleWnd";
-constexpr wchar_t kWindowTitle[] = L"USBTestStudio — 工程师通信控制台（设备发现）";
+constexpr wchar_t kWindowTitle[] = L"USBTestStudio — 工程师通信控制台";
 
 // WM_APP+1：后台扫描完成（LPARAM: new std::vector<ConsoleDevice>，UI 侧 delete）
 constexpr UINT kMsgCatalogDone = WM_APP + 1;
@@ -49,7 +50,7 @@ bool ConsoleWindow::register_class(HINSTANCE hinst) {
 }
 
 ConsoleWindow::~ConsoleWindow() {
-    // m_sessions 逆序析构即逐个 close（读线程先 join），无需额外收口
+    // m_panes 逐个析构：面板先断接收回调再销毁窗口，通道 close 前先 join 读线程
     if (m_accel) ::DestroyAcceleratorTable(m_accel);
     if (m_font) ::DeleteObject(m_font);
 }
@@ -107,6 +108,7 @@ LRESULT ConsoleWindow::on_message(UINT msg, WPARAM wp, LPARAM lp) {
             make_fonts();
             apply_fonts();
             layout();
+            for (auto& p : m_panes) p->relayout(m_dpi);   // 子窗口不收 WM_DPICHANGED
             return 0;
         }
 
@@ -124,6 +126,16 @@ LRESULT ConsoleWindow::on_message(UINT msg, WPARAM wp, LPARAM lp) {
         case WM_NOTIFY: {
             auto* nm = reinterpret_cast<NMHDR*>(lp);
             if (nm->idFrom == IDC_LIST && nm->code == NM_DBLCLK) on_activate_item();
+            else if (nm->idFrom == IDC_TABS && nm->code == TCN_SELCHANGE) on_tab_switch();
+            else if (nm->idFrom == IDC_TABS && nm->code == NM_RCLICK) on_tab_rclick();
+            return 0;
+        }
+
+        case WM_TIMER: {
+            if (wp == kTickTimer) {   // 各会话共享一个 100ms 节拍（周期发送 §4.4）
+                const unsigned long long now = ::GetTickCount64();
+                for (auto& p : m_panes) p->tick(now);
+            }
             return 0;
         }
 
@@ -135,6 +147,7 @@ LRESULT ConsoleWindow::on_message(UINT msg, WPARAM wp, LPARAM lp) {
         }
 
         case WM_DESTROY:
+            ::KillTimer(m_hwnd, kTickTimer);
             ::PostQuitMessage(0);
             return 0;
 
@@ -166,6 +179,8 @@ void ConsoleWindow::on_create() {
     ACCEL acc[1] = {{FVIRTKEY, VK_F5, IDC_REFRESH}};
     m_accel = ::CreateAcceleratorTableW(acc, 1);
 
+    ::SetTimer(m_hwnd, kTickTimer, 100, nullptr);   // 周期发送节拍（§4.4 下限 100ms）
+
     do_scan();   // 启动即扫一次
 }
 
@@ -188,6 +203,7 @@ void ConsoleWindow::create_controls() {
                             LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER
                                 | LVS_NOSORTHEADER,
                             IDC_LIST);
+    m_tabs = create_control(m_hwnd, L"SysTabControl32", L"", WS_TABSTOP, IDC_TABS);
     m_status = create_control(m_hwnd, L"msctls_statusbar32", L"", SBARS_SIZEGRIP, IDC_STATUS);
 
     ListView_SetExtendedListViewStyleEx(m_list, LVS_EX_DOUBLEBUFFER | LVS_EX_FULLROWSELECT,
@@ -241,8 +257,24 @@ void ConsoleWindow::layout() {
     ::GetWindowRect(m_status, &sr);
     const int statusH = sr.bottom - sr.top;
 
+    // 中区：目录表格（S2）；下区：会话标签 + 面板（S3）。无会话时下区留白。
     const int row2Y = rowY + ctlH + m;
-    ::MoveWindow(m_list, m, row2Y, w - 2 * m, h - row2Y - statusH - m, TRUE);
+    const int below = h - row2Y - statusH - m;
+    const int listH = below * 45 / 100 < S(150) ? S(150) : below * 45 / 100;
+    ::MoveWindow(m_list, m, row2Y, w - 2 * m, listH, TRUE);
+
+    const int tabsY = row2Y + listH + m;
+    const int tabsH = below - listH - m;
+    ::MoveWindow(m_tabs, m, tabsY, w - 2 * m, tabsH, TRUE);
+
+    // 面板放进标签页显示区（TCM_ADJUSTRECT wParam=FALSE：窗口矩形 → 显示区）
+    RECT dr{};
+    ::GetClientRect(m_tabs, &dr);
+    ::SendMessageW(m_tabs, TCM_ADJUSTRECT, FALSE, reinterpret_cast<LPARAM>(&dr));
+    const int px = m + static_cast<int>(dr.left), py = tabsY + static_cast<int>(dr.top);
+    const int pw = static_cast<int>(dr.right - dr.left);
+    const int ph = static_cast<int>(dr.bottom - dr.top);
+    for (auto& p : m_panes) p->place(px, py, pw, ph);
 
     // 列宽按窗口 DPI 重应用（创建时的基准宽是 96dpi 口径）
     for (int i = 0; i < 5; ++i)
@@ -278,7 +310,7 @@ void ConsoleWindow::handle_scan_done(std::vector<ConsoleDevice>* catalog) {
     m_catalog = std::move(*catalog);
     refill();
     wchar_t done[48];
-    ::swprintf(done, 48, L"扫描完成 · 双击设备行开会话（收发台见 S3）");
+    ::swprintf(done, 48, L"扫描完成 · 双击设备行开会话");
     ::SendMessageW(m_status, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(done));
 }
 
@@ -339,9 +371,63 @@ void ConsoleWindow::on_activate_item() {
         return;
     }
     const std::wstring display = ch->desc().display;   // open 成功后描述才完整
-    m_sessions.push_back(std::move(ch));
-    const std::wstring info = L"会话已开: " + display;
+
+    // 标签标题：会话: <display>，超长截尾保标签条可读
+    std::wstring title = L"会话: " + display;
+    if (title.size() > 28) title = title.substr(0, 27) + L"…";
+
+    SessionPane* pane = SessionPane::create(m_hwnd, std::move(ch), std::move(title));
+    if (!pane) {
+        ::MessageBoxW(m_hwnd, L"创建会话面板失败。", L"通信控制台", MB_ICONWARNING);
+        return;
+    }
+    m_panes.emplace_back(pane);
+
+    TCITEMW ti{};
+    ti.mask = TCIF_TEXT;
+    ti.pszText = const_cast<LPWSTR>(pane->title().c_str());
+    const int idx = static_cast<int>(m_panes.size()) - 1;
+    ::SendMessageW(m_tabs, TCM_INSERTITEMW, static_cast<WPARAM>(idx),
+                   reinterpret_cast<LPARAM>(&ti));
+    ::SendMessageW(m_tabs, TCM_SETCURSEL, static_cast<WPARAM>(idx), 0);
+    on_tab_switch();
+    layout();
+
+    const std::wstring info = L"会话已开: " + display + L"（右键标签可关闭）";
     ::SendMessageW(m_status, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(info.c_str()));
+    status_refresh();
+}
+
+void ConsoleWindow::on_tab_switch() {
+    const int cur = static_cast<int>(::SendMessageW(m_tabs, TCM_GETCURSEL, 0, 0));
+    for (size_t k = 0; k < m_panes.size(); ++k)
+        m_panes[k]->show(static_cast<int>(k) == cur);   // 只显示当前标签的面板
+}
+
+void ConsoleWindow::on_tab_rclick() {
+    const int cur = static_cast<int>(::SendMessageW(m_tabs, TCM_GETCURSEL, 0, 0));
+    if (cur < 0 || cur >= static_cast<int>(m_panes.size())) return;
+    HMENU menu = ::CreatePopupMenu();
+    ::AppendMenuW(menu, MF_STRING, 1, L"关闭会话");
+    POINT pt{};
+    ::GetCursorPos(&pt);
+    if (::TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, m_hwnd,
+                         nullptr) == 1)
+        close_session(cur);
+    ::DestroyMenu(menu);
+}
+
+void ConsoleWindow::close_session(int idx) {
+    if (idx < 0 || idx >= static_cast<int>(m_panes.size())) return;
+    m_panes.erase(m_panes.begin() + idx);   // ~SessionPane：断回调→销毁窗→close 通道
+    ::SendMessageW(m_tabs, TCM_DELETEITEM, static_cast<WPARAM>(idx), 0);
+    if (!m_panes.empty()) {
+        const int cur = idx < static_cast<int>(m_panes.size()) ? idx
+                                                               : static_cast<int>(m_panes.size()) - 1;
+        ::SendMessageW(m_tabs, TCM_SETCURSEL, static_cast<WPARAM>(cur), 0);
+    }
+    on_tab_switch();
+    layout();
     status_refresh();
 }
 
@@ -349,6 +435,6 @@ void ConsoleWindow::status_refresh() {
     if (!m_status) return;
     wchar_t buf[96];
     ::swprintf(buf, 96, L"设备 %zu/%zu · 会话 %zu", m_view.size(), m_catalog.size(),
-               m_sessions.size());
+               m_panes.size());
     ::SendMessageW(m_status, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(buf));
 }

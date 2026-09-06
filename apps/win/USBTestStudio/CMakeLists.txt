@@ -17,6 +17,7 @@ add_executable(USBTestStudio WIN32
     src/ui/log_view.cpp
     src/ui/main_window.cpp
     src/ui/console_window.cpp
+    src/ui/session_pane.cpp
 )
 
 target_include_directories(USBTestStudio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
