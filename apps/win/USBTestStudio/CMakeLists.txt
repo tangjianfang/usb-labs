@@ -82,3 +82,17 @@ if(MSVC)
     target_compile_options(discovery_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
 target_link_libraries(discovery_selftest PRIVATE setupapi cfgmgr32 hid)
+
+# EP-4 S3 会话台前半离线自测（控制台；收发编解码+会话核心纯逻辑，无端口实现依赖）
+add_executable(session_selftest
+    src/app/session_selftest.cpp
+)
+target_include_directories(session_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(session_selftest PRIVATE
+    UNICODE _UNICODE
+    NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+)
+if(MSVC)
+    target_compile_options(session_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()

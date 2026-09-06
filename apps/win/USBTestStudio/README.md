@@ -177,6 +177,8 @@ USBTestStudio/
     ├── discovery/device_catalog.h EP-4 S2 目录条目+即时过滤（多关键词 AND/kind 掩码，纯逻辑）
     ├── discovery/serial_enum.h   COM 口枚举（SERIALCOMM 注册表，数字序排序）
     ├── discovery/catalog_build.h EP-4 S2 目录组装（DeviceInfo+COM 合流）+ 会话工厂（→IChannel）
+    ├── session/session_codec.h  EP-4 S3 收发编解码（发送框智能识别/双视图/时间戳行，纯逻辑）
+    ├── session/session_core.h   EP-4 S3 会话核心（帧日志/发送历史/周期节拍/时间基准，纯逻辑）
     ├── engine/test_engine.*      计划加载、步骤分发、判定、JSON 报告、事件泵
     └── ui/log_view.* / main_window.* / console_window.*   RichEdit 日志 / 产测主窗口 / EP-4 设备发现窗口
 ```
