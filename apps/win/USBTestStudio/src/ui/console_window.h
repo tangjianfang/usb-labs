@@ -59,6 +59,7 @@ private:
         IDC_CHK_HID = 1103,
         IDC_CHK_SERIAL = 1104,
         IDC_CHK_USB = 1105,
+        IDC_CHK_MSC = 1106,
         IDC_LIST = 1201,
         IDC_STATUS = 1202,
         IDC_TABS = 1203,
@@ -69,6 +70,7 @@ private:
     HWND m_hwnd = nullptr;
     HWND m_search = nullptr;
     HWND m_chkHid = nullptr, m_chkSerial = nullptr, m_chkUsb = nullptr;
+    HWND m_chkMsc = nullptr;
     HWND m_btnRefresh = nullptr;
     HWND m_list = nullptr;
     HWND m_tabs = nullptr;

@@ -38,8 +38,10 @@ USBTestStudio.exe [--plan <路径>] [--dut-sn <SN>] [--station <工位>] [--auto
 - `--auto`：产线模式，测试完成后自动退出并把**退出码**交给调用方。
 - `--console`：**EP-4 工程师通信控制台**（独立窗口，产测模式旁路）——设备目录
   即时过滤（搜索框输入 名称/VID:PID/协议/路径 子串，空格分隔多词 AND，协议
-  复选框二次过滤），F5 后台重扫，**双击设备行开会话**（HID/串口通道即刻打开；
-  收发台 UI 为 S3 切片）。
+  复选框二次过滤；目录含 USB/HID 接口、USB 大容量盘、COM 口三类来源），F5
+  后台重扫，**双击设备行开会话**——四类通道：HID 报告/串口终端/WinUSB 批量
+  管道（设备须绑定 WinUSB 驱动，open 失败即弹因）/MSC 只读 SCSI 直通（发送框
+  即 CDB：IN 命令回收数据帧，CHECK CONDITION 回收 18 字节 SENSE 帧）。
 - 退出码：`0` PASS，`1` FAIL，`2` 中止（用户关闭/停止），`3` 计划加载失败。
 - 报告自动写盘 `exe\reports\report_<计划名>_<DUT_SN>_<时间戳>.json`；也可 Ctrl+S 另存。
 - 快捷键：**F5** 扫描设备，**Ctrl+R** 运行计划，**Ctrl+S** 导出报告。
@@ -159,6 +161,8 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 | 14 | `PostMessage` 跨线程堆指针 payload | 引擎→UI 封送 | WPARAM/LPARAM 在 64 位下的截断（代码按 `INT_PTR`/指针尺寸传递，需复核） |
 | 15 | `WinUsb_Initialize` 前置与 `FILE_FLAG_OVERLAPPED` | WinUSB 批量管道（EP-4 S5） | 须以读写+重叠标志 CreateFile；未绑 WinUSB 驱动的设备返回失败码的区分 |
 | 16 | `WinUsb_ReadPipe` + `WinUsb_AbortPipe` 超时回收 | WinUSB 读轮片 | 取消在途传输后 `GetOverlappedResult(bWait=TRUE)` 的回收序列与 `ERROR_OPERATION_ABORTED` 竞态（口径同 HidPort） |
+| 17 | `WinUsb_Initialize` 接受 `GUID_DEVINTERFACE_USB_DEVICE` 接口路径 | EP-4 S5 目录 usb 行→通道 | 目录用 USB 设备节点接口路径（libusb 同口径）开 WinUSB；非 WinUSB 驱动设备的失败码区分需真机核对 |
+| 18 | `CreateFileW(\\.\PhysicalDriveN, GENERIC_READ)` 无管理员权限行为 | EP-4 S5 MSC 目录扫描/会话 | 普通权限下打开可能失败（目录少一行/会话 open 报错）；扫描期 INQUIRY/READ_CAPACITY 对已挂载卷的副作用边界 |
 
 ## 9. 文件结构
 
@@ -180,9 +184,12 @@ USBTestStudio/
     ├── channel/serial_channel.h  IChannel 串口实现（模板化 PortT，可注入假件自测）
     ├── channel/hid_channel.h     IChannel HID 实现（Report ID 透传，模板化同上）
     ├── channel/winusb_channel.h  EP-4 S5 IChannel WinUSB 实现（IN 传输=帧，模板化同上）
+    ├── channel/msc_channel.h     EP-4 S5 IChannel MSC 实现（发送框=CDB，CDB 方向/长度计划表
+    │                             为纯逻辑；CHECK CONDITION 以 SENSE 帧呈现；只读拒写，模板化同上）
     ├── discovery/device_catalog.h EP-4 S2 目录条目+即时过滤（多关键词 AND/kind 掩码，纯逻辑）
     ├── discovery/serial_enum.h   COM 口枚举（SERIALCOMM 注册表，数字序排序）
-    ├── discovery/catalog_build.h EP-4 S2 目录组装（DeviceInfo+COM 合流）+ 会话工厂（→IChannel）
+    ├── discovery/msc_enum.h      EP-4 S5 USB 大容量盘目录行（PhysicalDrive0..9 BusTypeUsb 过滤）
+    ├── discovery/catalog_build.h EP-4 S2/S5 目录组装（DeviceInfo+MSC+COM 合流）+ 会话工厂（四通道→IChannel）
     ├── session/session_codec.h  EP-4 S3 收发编解码（发送框智能识别/双视图/时间戳行，纯逻辑）
     ├── session/session_core.h   EP-4 S3 会话核心（帧日志/发送历史/周期节拍/时间基准，纯逻辑）
     ├── session/session_view.h   EP-4 S3 显示视图模型（渲染游标：暂停/双视图切换的账面-显示解耦，纯逻辑）

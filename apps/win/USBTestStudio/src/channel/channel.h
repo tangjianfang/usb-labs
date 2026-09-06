@@ -24,7 +24,7 @@ struct ChannelStats {
 };
 
 struct ChannelDesc {
-    std::wstring kind;      // "serial" / "hid" / "loopback"
+    std::wstring kind;      // "serial" / "hid" / "usb" / "msc"
     std::wstring display;   // "COM7 @115200 8N1" / "HID 1234:0002 ..."
     std::wstring path;      // 打开用路径（\\.\COM7 / HID 设备接口路径）
     // HID 顶层集合能力（HidChannel open 时自 HidCapsInfo 透传；S4 解析面板

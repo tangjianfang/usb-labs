@@ -3,6 +3,7 @@
 #include "ui/console_window.h"
 
 #include "discovery/catalog_build.h"
+#include "discovery/msc_enum.h"
 
 #include <commctrl.h>
 
@@ -117,7 +118,8 @@ LRESULT ConsoleWindow::on_message(UINT msg, WPARAM wp, LPARAM lp) {
             const int code = HIWORD(wp);
             if (id == IDC_REFRESH) do_scan();
             else if (id == IDC_SEARCH && code == EN_CHANGE) refill();   // 即时过滤：输入即收敛
-            else if ((id == IDC_CHK_HID || id == IDC_CHK_SERIAL || id == IDC_CHK_USB)
+            else if ((id == IDC_CHK_HID || id == IDC_CHK_SERIAL || id == IDC_CHK_USB
+                      || id == IDC_CHK_MSC)
                      && code == BN_CLICKED)
                 refill();
             return 0;
@@ -195,7 +197,9 @@ void ConsoleWindow::create_controls() {
                                  IDC_CHK_SERIAL);
     m_chkUsb = create_control(m_hwnd, L"Button", L"USB", BS_AUTOCHECKBOX | WS_TABSTOP,
                               IDC_CHK_USB);
-    for (HWND h : {m_chkHid, m_chkSerial, m_chkUsb})
+    m_chkMsc = create_control(m_hwnd, L"Button", L"MSC", BS_AUTOCHECKBOX | WS_TABSTOP,
+                              IDC_CHK_MSC);
+    for (HWND h : {m_chkHid, m_chkSerial, m_chkUsb, m_chkMsc})
         ::SendMessageW(h, BM_SETCHECK, BST_CHECKED, 0);   // 默认协议全选
     m_btnRefresh = create_control(m_hwnd, L"Button", L"刷新 (F5)",
                                   BS_PUSHBUTTON | WS_TABSTOP, IDC_REFRESH);
@@ -228,7 +232,8 @@ void ConsoleWindow::make_fonts() {
 
 void ConsoleWindow::apply_fonts() {
     if (!m_font) return;
-    HWND ctrls[] = {m_search, m_chkHid, m_chkSerial, m_chkUsb, m_btnRefresh, m_list, m_status};
+    HWND ctrls[] = {m_search, m_chkHid, m_chkSerial, m_chkUsb, m_chkMsc, m_btnRefresh,
+                    m_list, m_status};
     for (HWND h : ctrls)
         if (h) ::SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
 }
@@ -244,8 +249,8 @@ void ConsoleWindow::layout() {
     const int searchW = (w - 2 * m) * 42 / 100;
     ::MoveWindow(m_search, x, rowY + S(3), searchW, ctlH - S(6), TRUE);
     x += searchW + m;
-    const int chkW = S(56);
-    for (HWND chk : {m_chkHid, m_chkSerial, m_chkUsb}) {
+    const int chkW = S(52);
+    for (HWND chk : {m_chkHid, m_chkSerial, m_chkUsb, m_chkMsc}) {
         ::MoveWindow(chk, x, rowY, chkW, ctlH, TRUE);
         x += chkW;
     }
@@ -296,10 +301,11 @@ void ConsoleWindow::do_scan() {
     }
     HWND hwnd = m_hwnd;
     std::jthread([hwnd]() {
-        // 只读枚举（SetupDi + SERIALCOMM 注册表）在后台线程完成，目录经堆载
-        // payload 投递回 UI 线程；窗口销毁竞态由 PostMessage 失败路径兜底
+        // 只读枚举（SetupDi + SERIALCOMM 注册表 + PhysicalDrive 属性查询/INQUIRY）
+        // 在后台线程完成，目录经堆载 payload 投递回 UI 线程；窗口销毁竞态由
+        // PostMessage 失败路径兜底
         auto* payload = new std::vector<ConsoleDevice>(catalog_build::build_catalog(
-            DeviceEnumerator::scan(), serial_enum::scan()));
+            DeviceEnumerator::scan(), msc_enum::scan(), serial_enum::scan()));
         if (!::PostMessageW(hwnd, kMsgCatalogDone, 0, reinterpret_cast<LPARAM>(payload)))
             delete payload;
     }).detach();
@@ -322,6 +328,8 @@ unsigned ConsoleWindow::kind_mask() const noexcept {
         mask |= kind_bits(DeviceKind::serial);
     if (::SendMessageW(m_chkUsb, BM_GETCHECK, 0, 0) == BST_CHECKED)
         mask |= kind_bits(DeviceKind::usb);
+    if (::SendMessageW(m_chkMsc, BM_GETCHECK, 0, 0) == BST_CHECKED)
+        mask |= kind_bits(DeviceKind::msc);
     return mask;   // 全不勾 = 0 = 协议全选（device_matches 口径）
 }
 
@@ -360,8 +368,8 @@ void ConsoleWindow::on_activate_item() {
 
     std::unique_ptr<IChannel> ch = catalog_build::make_channel(d);
     if (!ch) {
-        ::MessageBoxW(m_hwnd, L"通用 USB 接口：WinUSB / MSC 通道在 S5 切片提供。",
-                      L"通信控制台", MB_ICONINFORMATION);
+        ::MessageBoxW(m_hwnd, L"该设备类型暂不支持开会话。", L"通信控制台",
+                      MB_ICONINFORMATION);
         return;
     }
     std::wstring err;

@@ -1,10 +1,12 @@
 // discovery_selftest.cpp — EP-4 S2 设备发现离线自测（无 USB 设备即可跑）：
 // 即时过滤核心（device_catalog：匹配域/大小写/多关键词 AND/kind 掩码/保序过滤）、
 // COM 口枚举（serial_enum：真注册表 SERIALCOMM，本机无串口时为空表同样绿）、
-// 目录组装与会话工厂（catalog_build：DeviceInfo→目录条目/COM 合流/通道创建口径）。
+// MSC 盘行（msc_enum：真 PhysicalDrive 属性查询，无 U 盘机器上空表同样绿）、
+// 目录组装与会话工厂（catalog_build：DeviceInfo/MSC/COM 合流 + 四通道创建口径）。
 // UI 表格与双击开会话的窗口层按切片表另行（真机）验收。
 #include "discovery/catalog_build.h"
 #include "discovery/device_catalog.h"
+#include "discovery/msc_enum.h"
 #include "discovery/serial_enum.h"
 
 #include <windows.h>
@@ -100,6 +102,29 @@ int wmain() {
     check(d.kind == DeviceKind::serial && d.path == L"COM7", "make_device 字段");
     check(device_matches(d, L"com7 cdc"), "条目可被过滤命中");
 
+    // ---- MSC 盘行（msc_enum，S5 后半） ----
+    ConsoleDevice md = msc_enum::make_device(2, L"Generic Flash Disk");
+    check(md.kind == DeviceKind::msc && md.path == L"\\\\.\\PhysicalDrive2",
+          "MSC make_device 字段");
+    check(md.name == L"Generic Flash Disk（PhysicalDrive2）", "MSC 具名行");
+    ConsoleDevice mu = msc_enum::make_device(5, L"");
+    check(mu.name == L"USB 大容量磁盘 5", "MSC 无名行回退");
+    check(md.kind_text() == L"MSC", "MSC kind_text");
+    check(device_matches(md, L"scsi"), "MSC 同义词 scsi 命中");
+    check(device_matches(md, L"usbstor"), "MSC 同义词 usbstor 命中");
+    check(device_matches(md, L"physicaldrive2"), "MSC 路径命中");
+    check(!device_matches(md, L"", kind_bits(DeviceKind::hid))
+              && device_matches(md, L"", kind_bits(DeviceKind::msc)), "MSC 掩码过滤");
+
+    // ---- 真 PhysicalDrive 扫描（无 U 盘机器上空表，同样必须绿；只验行形态） ----
+    auto msc_rows = msc_enum::scan(&err);
+    bool msc_form = true;
+    for (const auto& m : msc_rows)
+        if (m.kind != DeviceKind::msc
+            || m.path.rfind(L"\\\\.\\PhysicalDrive", 0) != 0)
+            msc_form = false;
+    check(msc_form, "MSC 扫描行均具形态");
+
     // ---- DeviceInfo → 目录条目（catalog_build，S2 后半） ----
     DeviceInfo di_hid;
     di_hid.class_name = L"HID";
@@ -124,28 +149,34 @@ int wmain() {
     ConsoleDevice n = catalog_build::from_device_info(di);
     check(n.kind == DeviceKind::usb && n.name == L"USB 设备", "无名无 VID 回退协议名");
 
-    // ---- 目录组装（USB/HID 枚举 + COM 合流） ----
+    // ---- 目录组装（USB/HID 枚举 + MSC + COM 合流） ----
     DeviceInfo usb_disk;
     usb_disk.class_name = L"USB";
     usb_disk.vid = 0x0C76;
     usb_disk.pid = 0x4002;
     usb_disk.path = L"\\\\?\\usb#vid_0c76&pid_4002#7&11e0f3c2&0&1";
     usb_disk.name = L"USB 大容量磁盘";
-    const auto cat = catalog_build::build_catalog({di, di_hid, usb_disk}, {L"COM7", L"COM3"});
-    check(cat.size() == 5, "目录 = USB/HID 枚举 + COM 合流");
+    const auto cat = catalog_build::build_catalog({di, di_hid, usb_disk}, {md},
+                                                 {L"COM7", L"COM3"});
+    check(cat.size() == 6, "目录 = USB/HID 枚举 + MSC + COM 合流");
     check(cat[0].name == L"USB 设备" && cat[1].kind == DeviceKind::hid
               && cat[2].kind == DeviceKind::usb, "USB/HID 枚举原序保持");
-    check(cat[3].path == L"COM7" && cat[4].path == L"COM3", "COM 原序接续");
-    check(cat[4].kind == DeviceKind::serial && cat[4].name == L"COM3", "COM 条目字段");
+    check(cat[3].kind == DeviceKind::msc && cat[3].path == L"\\\\.\\PhysicalDrive2",
+          "MSC 原序接续");
+    check(cat[4].path == L"COM7" && cat[5].path == L"COM3", "COM 原序接续");
+    check(cat[5].kind == DeviceKind::serial && cat[5].name == L"COM3", "COM 条目字段");
     auto hit = filter_devices(cat, L"COM3");
     check(hit.size() == 1 && hit[0].kind == DeviceKind::serial, "组装目录过滤命中 COM3");
     hit = filter_devices(cat, L"0c76 大容量");
     check(hit.size() == 1 && hit[0].name == L"USB 大容量磁盘", "组装目录过滤命中 VID+名称");
+    hit = filter_devices(cat, L"scsi");
+    check(hit.size() == 1 && hit[0].kind == DeviceKind::msc, "组装目录过滤命中 MSC");
 
     // ---- 会话工厂（双击开会话的通道口径；真机打开在切片验收） ----
     check(catalog_build::make_channel(h) != nullptr, "HID 条目 → 会话通道");
-    check(catalog_build::make_channel(cat[3]) != nullptr, "串口条目 → 会话通道");
-    check(catalog_build::make_channel(u) == nullptr, "通用 USB 条目暂无通道（S5）");
+    check(catalog_build::make_channel(cat[4]) != nullptr, "串口条目 → 会话通道");
+    check(catalog_build::make_channel(u) != nullptr, "通用 USB 条目 → WinUSB 通道（S5）");
+    check(catalog_build::make_channel(md) != nullptr, "MSC 条目 → SCSI 直通通道（S5）");
 
     printf("discovery_selftest: %d/%d PASS\n", g_pass, g_pass);
     return 0;

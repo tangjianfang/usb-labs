@@ -6,6 +6,7 @@
 // 3) WinUsbPort 纯逻辑（路径 VID/PID 解析、数据管道选型）直接离线验证。
 // 真机收发验收（S1/S5 验收口径）仍按切片表在真机上执行。
 #include "channel/hid_channel.h"
+#include "channel/msc_channel.h"
 #include "channel/serial_channel.h"
 #include "channel/winusb_channel.h"
 
@@ -16,6 +17,7 @@
 #include <cstring>
 #include <functional>
 #include <mutex>
+#include <string>
 
 // 回显假件：与 SerialPort 同名成员子集（open/close/is_open/device_path/
 // write_all/read_some）。write_all 入队，read_some 出队——模拟 TX-RX 短接。
@@ -181,10 +183,98 @@ private:
     std::atomic<bool> m_open{false};     // 读线程读 / 调用方写
 };
 
+// 回显假件（MSC 形态）：与 MscScsi 同名成员子集（open_physical_drive/close/
+// is_open/read_capacity/scsi_inquiry/pass_through）。IN 命令按确定性图案填充
+// data[i]=i^cdb[0]；force_status 预设非 0 时填固定格式 SENSE 并按真件口径
+// 返回 false（真件：DeviceIoControl 成功而 ScsiStatus≠0 → false + status 回传）。
+class MockMscPort {
+public:
+    bool open_physical_drive(unsigned index, bool write_access, std::wstring* err) {
+        if (fail_open) {
+            if (err) *err = L"模拟打开失败";
+            return false;
+        }
+        m_index = index;
+        m_last_write_access = write_access;
+        m_open = true;
+        return true;
+    }
+    void close() noexcept { m_open = false; }
+    bool is_open() const noexcept { return m_open; }
+
+    bool read_capacity(unsigned long long* total, unsigned* blk, std::wstring*) {
+        if (!m_open) return false;
+        *total = total_sectors;
+        *blk = block_size;
+        return true;
+    }
+    bool scsi_inquiry(std::string* v, std::string* p, std::string* r, unsigned char* t,
+                      std::wstring*) {
+        if (!m_open) return false;
+        if (v) *v = vendor;
+        if (p) *p = product;
+        if (r) *r = rev;
+        if (t) *t = 0;
+        return true;
+    }
+    bool pass_through(const uint8_t* cdb, uint8_t cdb_len, void* data, uint32_t data_len,
+                      unsigned char* sense, unsigned char* scsi_status, int data_dir,
+                      unsigned timeout_s, std::wstring* err) {
+        last_cdb.assign(cdb, cdb + cdb_len);
+        last_dir = data_dir;
+        last_data_len = data_len;
+        last_timeout_s = timeout_s;
+        if (!m_open) {
+            if (err) *err = L"盘未打开";
+            return false;
+        }
+        if (fail_ioctl) {                 // OS 层失败：status 保持调用方初值 0xFF
+            if (err) *err = L"模拟 DeviceIoControl 失败";
+            return false;
+        }
+        if (force_status != 0) {          // CHECK CONDITION：SENSE 即设备应答
+            if (scsi_status) *scsi_status = force_status;
+            if (sense) {
+                memset(sense, 0, 32);
+                sense[0] = 0x70;
+                sense[2] = sense_key;
+                sense[12] = sense_asc;
+                sense[13] = 0x00;
+            }
+            if (err) *err = L"模拟 SCSI CHECK CONDITION";
+            return false;
+        }
+        if (scsi_status) *scsi_status = 0;
+        if (data && data_len > 0 && data_dir == kMscDirIn) {
+            auto* out = static_cast<uint8_t*>(data);
+            for (uint32_t i = 0; i < data_len; ++i) out[i] = uint8_t(i) ^ cdb[0];
+        }
+        return true;
+    }
+
+    bool fail_open = false;
+    bool fail_ioctl = false;              // 模拟 OS 层直通失败
+    unsigned char force_status = 0;       // 非 0 → 模拟该 SCSI 状态（CHECK CONDITION）
+    unsigned char sense_key = 0x05, sense_asc = 0x21;   // ILLEGAL REQUEST / LBA 越界
+    unsigned long long total_sectors = 15667200;       // ≈8GB @512B
+    unsigned block_size = 512;
+    std::string vendor = "MOCKLAB", product = "UDISK-300", rev = "1.0";
+    unsigned m_index = 0;
+    bool m_last_write_access = true;
+    std::vector<uint8_t> last_cdb;
+    int last_dir = -1;
+    uint32_t last_data_len = 0;
+    unsigned last_timeout_s = 0;
+
+private:
+    std::atomic<bool> m_open{false};
+};
+
 // 强制编译产线实例的全部成员（不运行）
 template class SerialChannelT<SerialPort>;
 template class HidChannelT<HidPort>;
 template class WinUsbChannelT<WinUsbPort>;
+template class MscChannelT<MscScsi>;
 
 static int g_pass = 0;
 static void check(bool ok, const char* what) {
@@ -578,6 +668,156 @@ int wmain() {
         ch.set_read_timeout(0);                         // 打开态改超时
         Sleep(120);
     }   // 析构（读线程在跑）——验证 ~WinUsbChannelT 不挂死
+
+    // ============ MscChannel（EP-4 S5 后半） ============
+    using TestMsc = MscChannelT<MockMscPort>;
+
+    {   // parse_drive_index：三种合法形态 + 三种非法形态
+        unsigned idx = 99;
+        check(TestMsc::parse_drive_index(L"\\\\.\\PhysicalDrive3", &idx) && idx == 3,
+              "drive 解析 \\\\.\\PhysicalDrive3");
+        check(TestMsc::parse_drive_index(L"PhysicalDrive12", &idx) && idx == 12,
+              "drive 解析裸名 PhysicalDrive12");
+        check(TestMsc::parse_drive_index(L"physicaldrive0", &idx) && idx == 0,
+              "drive 解析大小写不敏感");
+        check(TestMsc::parse_drive_index(L"7", &idx) && idx == 7, "drive 解析纯数字");
+        check(!TestMsc::parse_drive_index(L"COM7", &idx), "drive 解析拒绝 COM 名");
+        check(!TestMsc::parse_drive_index(L"\\\\.\\PhysicalDrive", &idx),
+              "drive 解析拒绝无数字");
+        check(!TestMsc::parse_drive_index(L"PhysicalDrive3x", &idx),
+              "drive 解析拒绝尾随杂字符");
+    }
+    {   // msc_plan_cdb：方向/响应长度表（SPC/SBC 口径）
+        const uint8_t inquiry6[6] = {0x12, 0, 0, 0, 0x24, 0};
+        check(msc_plan_cdb(inquiry6, 6, 512).dir == kMscDirIn
+                  && msc_plan_cdb(inquiry6, 6, 512).resp_len == 36,
+              "CDB 计划 INQUIRY 长度取 cdb[4]");
+        const uint8_t alloc0[6] = {0x12, 0, 0, 0, 0, 0};
+        check(msc_plan_cdb(alloc0, 6, 512).resp_len == 0, "CDB 计划 INQUIRY 分配 0");
+        const uint8_t rcap[10] = {0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        check(msc_plan_cdb(rcap, 10, 512).dir == kMscDirIn
+                  && msc_plan_cdb(rcap, 10, 512).resp_len == 8,
+              "CDB 计划 READ_CAPACITY 恒 8");
+        uint8_t read10[10] = {0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x04, 0};
+        check(msc_plan_cdb(read10, 10, 512).dir == kMscDirIn
+                  && msc_plan_cdb(read10, 10, 512).resp_len == 4 * 512,
+              "CDB 计划 READ10 块数×块大小");
+        check(msc_plan_cdb(read10, 10, 0).resp_len == 0, "CDB 计划块大小未知置 0");
+        uint8_t read12[12] = {0xA8, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0};   // 块数大端 [6..9]=2
+        check(msc_plan_cdb(read12, 12, 512).resp_len == 2 * 512,
+              "CDB 计划 READ12 块数大端 [6..9]");
+        read10[7] = 0xFF;
+        read10[8] = 0xFF;
+        check(msc_plan_cdb(read10, 10, 512).resp_len == (1u << 20),
+              "CDB 计划巨型 READ 封顶 1MiB");
+        const uint8_t tur[6] = {0x00, 0, 0, 0, 0, 0};
+        check(msc_plan_cdb(tur, 6, 512).dir == kMscDirUnspec
+                  && msc_plan_cdb(tur, 6, 512).resp_len == 0,
+              "CDB 计划 TEST_UNIT_READY 无数据");
+        const uint8_t write10[10] = {0x2A, 0, 0, 0, 0, 0, 0, 0, 1, 0};
+        check(msc_plan_cdb(write10, 10, 512).dir == kMscDirOut, "CDB 计划 WRITE10 为 OUT");
+        const uint8_t msel6[6] = {0x15, 0, 0, 0, 0, 0};
+        check(msc_plan_cdb(msel6, 6, 512).dir == kMscDirOut, "CDB 计划 MODE_SELECT(6) 为 OUT");
+        const uint8_t unknown[10] = {0xEF, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        check(msc_plan_cdb(unknown, 10, 512).dir == kMscDirUnspec,
+              "CDB 计划未收录操作码按无数据直通");
+        check(msc_plan_cdb(inquiry6, 5, 512).dir == kMscDirInvalid, "CDB 计划拒绝 5 字节");
+        check(msc_plan_cdb(inquiry6, 8, 512).dir == kMscDirInvalid, "CDB 计划拒绝 8 字节");
+    }
+    {   // 契约：未开即发 + 未开即关
+        TestMsc ch(L"\\\\.\\PhysicalDrive3");
+        check(!ch.is_open(), "MSC 初始未打开");
+        check(ch.desc().kind.empty(), "MSC 未打开无描述");
+        const uint8_t cdb[6] = {0x12, 0, 0, 0, 0x24, 0};
+        std::wstring err;
+        check(!ch.send(cdb, 6, &err), "MSC 未打开 send 失败");
+        ch.close();                                    // 未开即关不崩溃
+    }
+    {   // 打开失败 → err 非空、仍处于关闭
+        TestMsc ch(L"\\\\.\\PhysicalDrive3");
+        ch.port().fail_open = true;
+        std::wstring err;
+        check(!ch.open(&err), "MSC open 失败返回 false");
+        check(!err.empty(), "MSC open 失败给出 err");
+        check(!ch.is_open(), "MSC 失败后未打开");
+    }
+    {   // 会话主径：描述（INQUIRY 身份+容量）、CDB→数据帧、无数据命令、统计
+        TestMsc ch(L"\\\\.\\PhysicalDrive3");
+        std::wstring err;
+        check(ch.open(&err), "MSC open 成功");
+        check(ch.desc().kind == L"msc", "MSC kind=msc");
+        check(ch.desc().path == L"\\\\.\\PhysicalDrive3", "MSC desc.path");
+        check(ch.desc().display.find(L"PhysicalDrive3") != std::wstring::npos
+                  && ch.desc().display.find(L"MOCKLAB UDISK-300") != std::wstring::npos
+                  && ch.desc().display.find(L"8.02GB") != std::wstring::npos
+                  && ch.desc().display.find(L"512B") != std::wstring::npos,
+              "MSC display 含盘号/身份/容量/块大小");
+        check(ch.port().m_last_write_access == false, "MSC 只读打开（write_access=false）");
+
+        std::vector<std::vector<uint8_t>> frames;
+        ch.set_receive_callback([&](const std::vector<uint8_t>& b) { frames.push_back(b); });
+
+        const uint8_t inquiry[6] = {0x12, 0, 0, 0, 0x24, 0};
+        check(ch.send(inquiry, 6, &err), "MSC send INQUIRY 成功");
+        check(frames.size() == 1 && frames[0].size() == 36, "MSC INQUIRY 数据帧 36 字节");
+        check(frames[0][0] == 0x12 && frames[0][5] == (5 ^ 0x12), "MSC 数据帧确定性图案");
+        check(ch.port().last_cdb.size() == 6 && ch.port().last_cdb[0] == 0x12,
+              "MSC 直通收到原样 CDB");
+        check(ch.port().last_dir == kMscDirIn, "MSC 直通方向 IN");
+        check(ch.port().last_data_len == 36, "MSC 直通缓冲 36");
+        ChannelStats st = ch.stats();
+        check(st.tx_frames == 1 && st.tx_bytes == 6 && st.rx_frames == 1 && st.rx_bytes == 36,
+              "MSC INQUIRY 统计");
+
+        const uint8_t tur[6] = {0x00, 0, 0, 0, 0, 0};
+        check(ch.send(tur, 6, &err), "MSC send TEST_UNIT_READY 成功");
+        check(frames.size() == 1, "MSC 无数据命令不产帧");
+        check(ch.stats().tx_frames == 2, "MSC TUR 计 tx");
+
+        ch.port().force_status = 2;                    // CHECK CONDITION
+        uint8_t read10[10] = {0x28, 0, 0, 0, 0, 0, 0, 0, 0x04, 0};
+        err.clear();
+        check(ch.send(read10, 10, &err), "MSC CHECK CONDITION 仍算命令完成");
+        check(frames.size() == 2 && frames[1].size() == 18, "MSC SENSE 帧 18 字节");
+        check(frames[1][0] == 0x70 && frames[1][2] == 0x05 && frames[1][12] == 0x21,
+              "MSC SENSE 帧 key/ASC 原样");
+        st = ch.stats();
+        check(st.rx_frames == 2 && st.rx_bytes == 36 + 18, "MSC SENSE 计 rx");
+        ch.port().force_status = 0;
+
+        const uint8_t write10[10] = {0x2A, 0, 0, 0, 0, 0, 0, 0, 1, 0};
+        err.clear();
+        check(!ch.send(write10, 10, &err), "MSC WRITE10 拒收");
+        check(err.find(L"只读") != std::wstring::npos, "MSC 拒收给出只读原因");
+        check(ch.stats().tx_frames == 3, "MSC 拒收不计统计（前 3 条已发）");
+
+        const uint8_t bad5[5] = {0x12, 0, 0, 0, 0x24};
+        err.clear();
+        check(!ch.send(bad5, 5, &err), "MSC 5 字节 CDB 拒收");
+        check(!err.empty(), "MSC 非法 CDB 给出 err");
+
+        ch.port().fail_ioctl = true;                   // OS 层失败 → send false
+        err.clear();
+        check(!ch.send(inquiry, 6, &err), "MSC OS 层失败 send false");
+        check(!err.empty(), "MSC OS 层失败给出 err");
+        check(frames.size() == 2, "MSC OS 层失败不产帧");
+        ch.port().fail_ioctl = false;
+
+        ch.set_read_timeout(2000);
+        check(ch.send(inquiry, 6, &err) && ch.port().last_timeout_s == 2,
+              "MSC set_read_timeout 2000ms→2s");
+        ch.set_read_timeout(500);
+        check(ch.send(inquiry, 6, &err) && ch.port().last_timeout_s == 1,
+              "MSC set_read_timeout 500ms 向上取整 1s");
+        ch.set_read_timeout(0);
+        check(ch.send(inquiry, 6, &err) && ch.port().last_timeout_s == 0,
+              "MSC set_read_timeout 0→端口默认");
+
+        ch.close();
+        check(!ch.is_open(), "MSC close 后未打开");
+        check(ch.open(&err), "MSC 重开成功");
+        ch.close();
+    }
 
     printf("channel_selftest: %d/%d PASS\n", g_pass, g_pass);
     return 0;

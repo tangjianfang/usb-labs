@@ -46,14 +46,15 @@ if(MSVC)
     )
 endif()
 
-# EP-4 S1/S5 通道层离线自测（控制台；MockEchoPort/MockHidPort/MockWinUsbPort 注入模板 +
-# SerialPort/HidPort/WinUsbPort 显式实例化）
+# EP-4 S1/S5 通道层离线自测（控制台；MockEchoPort/MockHidPort/MockWinUsbPort/MockMscPort
+# 注入模板 + SerialPort/HidPort/WinUsbPort/MscScsi 显式实例化）
 add_executable(channel_selftest
     src/app/channel_selftest.cpp
     src/framework/win32_rai.cpp
     src/usb/hid_port.cpp
     src/usb/serial_port.cpp
     src/usb/winusb_port.cpp
+    src/usb/msc_scsi.cpp
 )
 target_include_directories(channel_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(channel_selftest PRIVATE
@@ -67,13 +68,15 @@ if(MSVC)
 endif()
 target_link_libraries(channel_selftest PRIVATE setupapi cfgmgr32 hid winusb)
 
-# EP-4 S2 设备发现离线自测（控制台；目录模型+即时过滤+COM 枚举+目录组装/会话工厂，
-# 无 USB 设备亦可跑；catalog_build 引入 HidPort/SerialPort 成员 → 链两端口实现）
+# EP-4 S2/S5 设备发现离线自测（控制台；目录模型+即时过滤+COM 枚举+MSC 盘行+
+# 目录组装/会话工厂，无 USB 设备亦可跑；catalog_build 引入四通道成员 → 链端口实现）
 add_executable(discovery_selftest
     src/app/discovery_selftest.cpp
     src/framework/win32_rai.cpp
     src/usb/hid_port.cpp
     src/usb/serial_port.cpp
+    src/usb/winusb_port.cpp
+    src/usb/msc_scsi.cpp
 )
 target_include_directories(discovery_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(discovery_selftest PRIVATE
@@ -85,7 +88,7 @@ target_compile_definitions(discovery_selftest PRIVATE
 if(MSVC)
     target_compile_options(discovery_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
-target_link_libraries(discovery_selftest PRIVATE setupapi cfgmgr32 hid)
+target_link_libraries(discovery_selftest PRIVATE setupapi cfgmgr32 hid winusb)
 
 # EP-4 S3 会话台前半离线自测（控制台；收发编解码+会话核心纯逻辑，无端口实现依赖）
 add_executable(session_selftest

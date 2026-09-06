@@ -11,11 +11,12 @@
 #include <string_view>
 #include <vector>
 
-// 设备协议种类（兼作复选框位掩码；WinUSB/MSC 细分在 S5 通道落地时展开）
+// 设备协议种类（兼作复选框位掩码；S5 后半起 usb/msc 细分落地）
 enum class DeviceKind : unsigned {
     hid    = 1u << 0,   // HID 收集 → HidChannel 报告会话
     serial = 1u << 1,   // CDC/串口 → SerialChannel 终端会话
-    usb    = 1u << 2,   // 其他 USB 设备接口（S5 前占位）
+    usb    = 1u << 2,   // 其他 USB 设备接口 → WinUsbChannel 批量管道会话
+    msc    = 1u << 3,   // USB 大容量盘 → MscChannel 只读 SCSI 直通会话
 };
 constexpr unsigned operator|(DeviceKind a, DeviceKind b) noexcept {
     return unsigned(a) | unsigned(b);
@@ -38,6 +39,7 @@ struct ConsoleDevice {
         switch (kind) {
             case DeviceKind::hid:    return L"HID";
             case DeviceKind::serial: return L"串口";
+            case DeviceKind::msc:    return L"MSC";
             default:                 return L"USB";
         }
     }
@@ -45,6 +47,7 @@ struct ConsoleDevice {
         switch (kind) {
             case DeviceKind::hid:    return L"hid";
             case DeviceKind::serial: return L"serial cdc";
+            case DeviceKind::msc:    return L"msc scsi usbstor";
             default:                 return L"usb winusb";
         }
     }
