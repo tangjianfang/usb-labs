@@ -1,4 +1,5 @@
-// msc_scsi.cpp — SCSI PASS-THROUGH DIRECT 实现。未真机编译，按 MSDN 口径编写。
+// msc_scsi.cpp — SCSI PASS-THROUGH DIRECT 实现。已随离线构建编译，未真机运行，
+// 运行时 API 行为按 MSDN 口径编写（复核点见 README 不确定清单 #8~#10）。
 #include "usb/msc_scsi.h"
 
 #include <winioctl.h>

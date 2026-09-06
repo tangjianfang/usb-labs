@@ -193,15 +193,25 @@ bool WinUsbPort::read_pipe(std::vector<uint8_t>& buf, unsigned timeout_ms, bool*
         }
         DWORD wait = ::WaitForSingleObject(ov.hEvent, timeout_ms);
         if (wait == WAIT_TIMEOUT) {
-            // 超时：AbortPipe 取消本次传输并等待回收（口径同 HidPort::read_overlapped）
+            // 超时：AbortPipe 取消本次传输并等待回收（口径同 HidPort::read_overlapped）。
+            // 边界竞态防护：超时判定与中止生效之间传输可能已完成——GOR 成功即交付
+            // 该帧（设备不会重发，按轮空丢弃即丢帧——对抗复核指出）
             ::WinUsb_AbortPipe(m_iface.get(), m_caps.in_pipe);
-            DWORD dummy = 0;
-            ::GetOverlappedResult(m_handle.get(), &ov, &dummy, TRUE);
+            DWORD got2 = 0;
+            if (::GetOverlappedResult(m_handle.get(), &ov, &got2, TRUE) && got2 > 0) {
+                buf.resize(got2);
+                return true;
+            }
             if (timed_out) *timed_out = true;
             return false;
         }
         if (wait != WAIT_OBJECT_0) {
-            if (err) *err = wraii::win_err(L"WaitForSingleObject", ::GetLastError());
+            // WAIT_FAILED 等：先取码，再取消在途传输并回收（避免 RAII 关闭事件后留孤儿 IO）
+            DWORD e2 = ::GetLastError();
+            ::WinUsb_AbortPipe(m_iface.get(), m_caps.in_pipe);
+            DWORD dummy = 0;
+            ::GetOverlappedResult(m_handle.get(), &ov, &dummy, TRUE);
+            if (err) *err = wraii::win_err(L"WaitForSingleObject", e2);
             return false;
         }
         if (!::GetOverlappedResult(m_handle.get(), &ov, &got, FALSE)) {
@@ -229,7 +239,8 @@ bool WinUsbPort::read_pipe(std::vector<uint8_t>& buf, unsigned timeout_ms, bool*
     return true;
 }
 
-bool WinUsbPort::write_pipe(const uint8_t* data, size_t len, std::wstring* err) {
+bool WinUsbPort::write_pipe(const uint8_t* data, size_t len, std::wstring* err,
+                            unsigned timeout_ms) {
     if (!is_open()) {
         if (err) *err = L"WinUSB 未打开";
         return false;
@@ -259,12 +270,31 @@ bool WinUsbPort::write_pipe(const uint8_t* data, size_t len, std::wstring* err) 
             if (err) *err = wraii::win_err(L"WinUsb_WritePipe", e);
             return false;
         }
-        // send 为同步语义：无限等待完成（写路径无超时轮片概念）
-        if (::WaitForSingleObject(ov.hEvent, INFINITE) != WAIT_OBJECT_0) {
-            if (err) *err = wraii::win_err(L"WaitForSingleObject", ::GetLastError());
+        // send 为同步语义但等待有界：固件不收 OUT（NAK 永续）时挂死的会是调用
+        // 线程（会话台 send 即 UI 线程），超时 → AbortPipe 取消并回收（口径同 read_pipe）
+        DWORD wait = ::WaitForSingleObject(ov.hEvent, timeout_ms);
+        bool have_done = false;
+        if (wait == WAIT_TIMEOUT) {
+            ::WinUsb_AbortPipe(m_iface.get(), m_caps.out_pipe);
+            DWORD done2 = 0;
+            // 边界竞态：超时判定与中止生效之间传输可能已完成——GOR 成功且足量按成功，
+            // 否则重发会造成设备收到重复命令（对抗复核指出的误报路径）
+            if (::GetOverlappedResult(m_handle.get(), &ov, &done2, TRUE) && done2 == len) {
+                done = done2;
+                have_done = true;
+            } else {
+                if (err) *err = L"写超时：设备未接收 OUT 传输（固件未处理该管道？）";
+                return false;
+            }
+        } else if (wait != WAIT_OBJECT_0) {
+            DWORD e2 = ::GetLastError();   // 先取码再回收，防回收序列覆写（诊断口径）
+            ::WinUsb_AbortPipe(m_iface.get(), m_caps.out_pipe);
+            DWORD dummy = 0;
+            ::GetOverlappedResult(m_handle.get(), &ov, &dummy, TRUE);
+            if (err) *err = wraii::win_err(L"WaitForSingleObject", e2);
             return false;
         }
-        if (!::GetOverlappedResult(m_handle.get(), &ov, &done, FALSE)) {
+        if (!have_done && !::GetOverlappedResult(m_handle.get(), &ov, &done, FALSE)) {
             if (err) *err = wraii::win_err(L"GetOverlappedResult", ::GetLastError());
             return false;
         }

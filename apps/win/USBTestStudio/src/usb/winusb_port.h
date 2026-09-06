@@ -66,8 +66,12 @@ public:
     bool read_pipe(std::vector<uint8_t>& buf, unsigned timeout_ms, bool* timed_out,
                    std::wstring* err = nullptr);
 
-    // 写一个数据 OUT 管道传输（同步语义：等待完成或失败）。
-    bool write_pipe(const uint8_t* data, size_t len, std::wstring* err = nullptr);
+    // 写一个数据 OUT 管道传输（同步语义但**有界等待**：超时 → AbortPipe 取消并
+    // 回收后报错返回。设备固件不收 OUT 包（NAK 永续）是 bring-up 常态，无限等待
+    // 会把调用线程（会话台 send 即 UI 线程）挂死且关会话无法恢复——CloseHandle
+    // 不会点亮 OVERLAPPED 事件）。
+    bool write_pipe(const uint8_t* data, size_t len, std::wstring* err = nullptr,
+                    unsigned timeout_ms = 3000);
 
 private:
     bool query_pipes(std::wstring* err);   // WinUsb_QueryPipe 遍历 + select_data_pipes

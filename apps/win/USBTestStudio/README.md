@@ -163,6 +163,7 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 | 16 | `WinUsb_ReadPipe` + `WinUsb_AbortPipe` 超时回收 | WinUSB 读轮片 | 取消在途传输后 `GetOverlappedResult(bWait=TRUE)` 的回收序列与 `ERROR_OPERATION_ABORTED` 竞态（口径同 HidPort） |
 | 17 | `WinUsb_Initialize` 接受 `GUID_DEVINTERFACE_USB_DEVICE` 接口路径 | EP-4 S5 目录 usb 行→通道 | 目录用 USB 设备节点接口路径（libusb 同口径）开 WinUSB；非 WinUSB 驱动设备的失败码区分需真机核对 |
 | 18 | `CreateFileW(\\.\PhysicalDriveN, GENERIC_READ)` 无管理员权限行为 | EP-4 S5 MSC 目录扫描/会话 | 普通权限下打开可能失败（目录少一行/会话 open 报错）；扫描期 INQUIRY/READ_CAPACITY 对已挂载卷的副作用边界 |
+| 19 | `WinUsb_WritePipe` 超时后 `WinUsb_AbortPipe` 取消 | EP-4 S5 写路径有界等待（evolve #71） | OUT 传输被取消时设备侧可能已收部分字节（帧不完整、上层按失败处理）；超时判定与中止生效间的完成竞态（代码已按 GOR 结果兜底，需真机证实）；AbortPipe 本身失败时 `GetOverlappedResult(bWait=TRUE)` 理论可无限等待（回收路径返值未设防，低概率）；3s 默认对慢设备（Flash 缓冲写）是否偏紧 |
 
 ## 9. 文件结构
 

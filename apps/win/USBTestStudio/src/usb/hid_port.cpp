@@ -146,15 +146,24 @@ bool HidPort::read_overlapped(std::vector<uint8_t>& report, unsigned timeout_ms,
         }
         DWORD wait = ::WaitForSingleObject(ov.hEvent, timeout_ms);
         if (wait == WAIT_TIMEOUT) {
-            // 超时：取消本次 I/O 并等待操作回收（以 MSDN 为准）
+            // 超时：取消本次 I/O 并等待操作回收（以 MSDN 为准）。边界竞态防护：
+            // 超时判定与取消生效之间读可能已完成——GOR 成功即交付该报告（丢弃即丢帧）
             ::CancelIoEx(m_handle.get(), &ov);
-            DWORD dummy = 0;
-            ::GetOverlappedResult(m_handle.get(), &ov, &dummy, TRUE);
+            DWORD got2 = 0;
+            if (::GetOverlappedResult(m_handle.get(), &ov, &got2, TRUE) && got2 > 0) {
+                report.resize(got2);
+                return true;
+            }
             if (timed_out) *timed_out = true;
             return false;
         }
         if (wait != WAIT_OBJECT_0) {
-            if (err) *err = wraii::win_err(L"WaitForSingleObject", ::GetLastError());
+            // WAIT_FAILED 等：先取码，再取消在途 I/O 并回收（避免 RAII 关闭事件后留孤儿 IO）
+            DWORD e2 = ::GetLastError();
+            ::CancelIoEx(m_handle.get(), &ov);
+            DWORD dummy = 0;
+            ::GetOverlappedResult(m_handle.get(), &ov, &dummy, TRUE);
+            if (err) *err = wraii::win_err(L"WaitForSingleObject", e2);
             return false;
         }
         if (!::GetOverlappedResult(m_handle.get(), &ov, &got, FALSE)) {
