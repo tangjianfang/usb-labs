@@ -56,7 +56,10 @@ private:
     int  S(int px96) const noexcept { return MulDiv(px96, static_cast<int>(m_dpi), 96); }
 
     // 动作
-    void do_send();                    // 发送当前发送框内容（按钮/Ctrl+↵/周期共用）
+    // 发送当前发送框内容（按钮/Ctrl+↵/周期共用）。transport_failed 非空时回填
+    // 是否传输层失败（通道未开/send 失败——周期节拍据此自动停止；解析错误/
+    // 空内容属内容问题不算，不触发 disarm）
+    void do_send(bool* transport_failed = nullptr);
     void recall(bool up);              // ↑↓ 历史回选（草稿态语义见 session_core）
     void on_rx(std::vector<uint8_t>* payload);   // UI 线程：入账 + 渲染增量
     void render_poll();                // poll 增量 → 追加接收区（含滚底）

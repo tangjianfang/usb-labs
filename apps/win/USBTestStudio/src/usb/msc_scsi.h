@@ -30,8 +30,9 @@ public:
                       int data_dir, unsigned timeout_s, std::wstring* err);
 
     bool scsi_inquiry(std::string* vendor8, std::string* product16, std::string* rev4,
-                      unsigned char* periph_type, std::wstring* err);
-    bool read_capacity(unsigned long long* total_sectors, unsigned* block_size, std::wstring* err);
+                      unsigned char* periph_type, std::wstring* err, unsigned timeout_s = 0);
+    bool read_capacity(unsigned long long* total_sectors, unsigned* block_size, std::wstring* err,
+                       unsigned timeout_s = 0);
     bool read10(unsigned long long lba, unsigned blocks, std::vector<uint8_t>& out,
                 std::wstring* err);
 

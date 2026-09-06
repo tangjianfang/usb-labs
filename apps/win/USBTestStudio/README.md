@@ -8,7 +8,7 @@ USB-Labs 的 Windows 原生上位机：**测试计划(JSON) → 步骤执行（�
 - 稳定：全部 Win32 句柄 RAII（`wraii::unique_handle`）；UI 线程零阻塞 I/O；引擎→UI 经 `PostMessage(WM_APP+1..3)` + 堆载 payload；日志有界队列 + 丢弃计数
 - 人性化：原生控件、PerMonitorV2 DPI、快捷键 F5 / Ctrl+R / Ctrl+S、等宽着色日志
 
-> **重要声明：本工程未在真机上编译验证。** 代码按 MSDN 口径编写，所有需要复核的 API 细节见文末“不确定 API 清单”，源码内亦有行内注释标注（“以 MSDN 为准”）。
+> **重要声明：本工程已按 MSDN 口径编写并保持 MSVC 编译绿（五靶零告警，evolve #64 起），但未在真机上运行验证。** 所有需要复核的 API 细节见文末“不确定 API 清单”，源码内亦有行内注释标注（“以 MSDN 为准”）。
 
 ---
 
@@ -133,7 +133,7 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 
 ## 7. 已知限制
 
-1. **未在真机编译**——本工程按 MSDN 口径盲写；首次编译预计需要小幅修正（见下方不确定清单）。
+1. **未真机运行**——工程保持 MSVC 五靶编译绿（#64 起零告警，纯逻辑自测离线可跑），但设备访问层未经真机联调；首次真机联调预计需按下方不确定清单小幅修正。
 2. `msc_write_verify`（DESTRUCTIVE 写读校验）未实现；`line_coding`（WinUSB 控制传输）与 `dfu_verify`（外部工具）未实现，执行到即 FAIL。
 3. `READ_CAPACITY(10)` 上限 2TB；更大盘需 `READ_CAPACITY(16)`（service action 0x10），未实现。
 4. `hid_report_loopback`/`serial_loopback` 依赖回显固件或工装短接，纯软件无法自测。
@@ -164,6 +164,8 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 | 17 | `WinUsb_Initialize` 接受 `GUID_DEVINTERFACE_USB_DEVICE` 接口路径 | EP-4 S5 目录 usb 行→通道 | 目录用 USB 设备节点接口路径（libusb 同口径）开 WinUSB；非 WinUSB 驱动设备的失败码区分需真机核对 |
 | 18 | `CreateFileW(\\.\PhysicalDriveN, GENERIC_READ)` 无管理员权限行为 | EP-4 S5 MSC 目录扫描/会话 | 普通权限下打开可能失败（目录少一行/会话 open 报错）；扫描期 INQUIRY/READ_CAPACITY 对已挂载卷的副作用边界 |
 | 19 | `WinUsb_WritePipe` 超时后 `WinUsb_AbortPipe` 取消 | EP-4 S5 写路径有界等待（evolve #71） | OUT 传输被取消时设备侧可能已收部分字节（帧不完整、上层按失败处理）；超时判定与中止生效间的完成竞态（代码已按 GOR 结果兜底，需真机证实）；AbortPipe 本身失败时 `GetOverlappedResult(bWait=TRUE)` 理论可无限等待（回收路径返值未设防，低概率）；3s 默认对慢设备（Flash 缓冲写）是否偏紧 |
+| 20 | `WriteFile`（HID 输出报告）+ `CancelIoEx` 超时回收 | EP-4 HID 写路径有界等待（evolve #72） | 集合无中断 OUT 管道/蓝牙 HID 时 `WriteFile` 的失败码口径（代码按"立即失败即回退 `HidD_SetOutputReport` 控制传输"处理，MSDN/hidapi 口径需真机证实）；超时判定与取消生效间的完成竞态（代码已按 GOR 结果兜底，口径同 #7/#16）；`CancelIoEx` 后 `GetOverlappedResult(bWait=TRUE)` 若驱动迟不兑现取消理论可无限等待（同 #19 低概率残留）；`HidD_SetOutputReport` 同步控制传输在主机栈的实际超时上界（不可取消、且失败后还会以临时同步句柄二次尝试——病态设备下该回退路径可远超 3s，UI 线程调用时为自认残留） |
+| 21 | MSC 会话 3s 默认直通超时（`SCSI_PASS_THROUGH_DIRECT.TimeOutValue`） | EP-4 MSC 会话 send/open 有界（evolve #72） | 3s 对慢速盘（螺旋 HDD 冷启动/大块 READ10）是否偏紧；超时后设备侧命令可能仍在执行——重发同命令的副作用边界（只读通道影响有限） |
 
 ## 9. 文件结构
 

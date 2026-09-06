@@ -168,13 +168,14 @@ bool MscScsi::pass_through(const uint8_t* cdb, uint8_t cdb_len, void* data, uint
 }
 
 bool MscScsi::scsi_inquiry(std::string* vendor8, std::string* product16, std::string* rev4,
-                           unsigned char* periph_type, std::wstring* err) {
+                           unsigned char* periph_type, std::wstring* err, unsigned timeout_s) {
     // CDB6 INQUIRY：分配长度 36（与 tools/usbtest/msc_test.py 同口径）
     uint8_t cdb[6] = {0x12, 0x00, 0x00, 0x00, 36, 0x00};
     uint8_t data[36] = {};
     uint8_t sense[32] = {};
     unsigned char status = 0;
-    if (!pass_through(cdb, 6, data, sizeof(data), sense, &status, SCSI_IOCTL_DATA_IN, 10, err))
+    if (!pass_through(cdb, 6, data, sizeof(data), sense, &status, SCSI_IOCTL_DATA_IN, timeout_s,
+                      err))
         return false;
     if (periph_type) *periph_type = static_cast<unsigned char>(data[0] & 0x1F);
     if (vendor8) *vendor8 = trim_ascii(reinterpret_cast<const char*>(&data[8]), 8);
@@ -184,13 +185,14 @@ bool MscScsi::scsi_inquiry(std::string* vendor8, std::string* product16, std::st
 }
 
 bool MscScsi::read_capacity(unsigned long long* total_sectors, unsigned* block_size,
-                            std::wstring* err) {
+                            std::wstring* err, unsigned timeout_s) {
     // CDB10 READ_CAPACITY(0x25)
     uint8_t cdb[10] = {0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     uint8_t data[8] = {};
     uint8_t sense[32] = {};
     unsigned char status = 0;
-    if (!pass_through(cdb, 10, data, sizeof(data), sense, &status, SCSI_IOCTL_DATA_IN, 10, err))
+    if (!pass_through(cdb, 10, data, sizeof(data), sense, &status, SCSI_IOCTL_DATA_IN, timeout_s,
+                      err))
         return false;
     unsigned long long last_lba = be32(data);
     unsigned blk = be32(data + 4);

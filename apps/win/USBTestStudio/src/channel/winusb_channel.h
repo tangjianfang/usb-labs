@@ -1,8 +1,8 @@
 // winusb_channel.h — IChannel 的 WinUSB 批量管道会话实现（EP-4 S5 前半）：
 // 适配 WinUsbPort：open 填描述（VID:PID 自路径解析 + 选型管道号），后台读线程
 // read_pipe 轮片，每个完成的 IN 传输计为一帧并回调；send 即 write_pipe
-//（同步有界：默认 3s 超时后取消回收并报错——固件不收 OUT 时不挂死调用线程；
-// 无 OUT 管道的只读设备 send 必然失败，由 err 呈现）。
+//（同步有界：显式透传 kSendTimeoutMs（3s）超时后取消回收并报错——固件不收
+// OUT 时不挂死调用线程；无 OUT 管道的只读设备 send 必然失败，由 err 呈现）。
 // 读线程口径与 Serial/HID 同：超时=轮空继续；非超时错误（常见为设备拔出）
 // =线程退出，通道仍报 is_open，由会话台感知无帧后提示。
 // 目录接线（usb 行 → 本通道）随 S5 后半与 MSC 一并落——设备接口路径须由
@@ -48,7 +48,7 @@ public:
     bool is_open() const noexcept override { return m_port.is_open(); }
 
     bool send(const uint8_t* data, size_t len, std::wstring* err = nullptr) override {
-        if (!m_port.write_pipe(data, len, err)) return false;
+        if (!m_port.write_pipe(data, len, err, kSendTimeoutMs)) return false;
         std::lock_guard<std::mutex> g(m_mtx);
         m_stats.tx_frames += 1;
         m_stats.tx_bytes += len;

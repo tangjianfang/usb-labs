@@ -3,7 +3,8 @@
 // read_overlapped 轮片，每个输入报告计为一帧并回调——报告含 Report ID
 // 前缀字节，原样透传给上层（解析面板 S4 负责展开）。send 即
 // set_output_report（data[0]=Report ID，不足 OutputReportByteLength 由
-// Port 内部补零；只读句柄设备 send 必然失败，由 err 呈现）。
+// Port 内部补零；WriteFile 重叠有界主路默认 3s，设备 NAK 永续不挂死调用
+// 线程；只读句柄设备 send 必然失败，由 err 呈现）。
 // 读线程口径：超时=轮空继续；非超时错误（常见为设备拔出）=线程退出，
 // 与 SerialChannelT 同——通道仍报 is_open，由会话台感知无帧后提示。
 // 模板化 PortT 以便离线自测注入回显假件。
@@ -48,7 +49,7 @@ public:
     bool is_open() const noexcept override { return m_port.is_open(); }
 
     bool send(const uint8_t* data, size_t len, std::wstring* err = nullptr) override {
-        if (!m_port.set_output_report(data, len, err)) return false;
+        if (!m_port.set_output_report(data, len, err, kSendTimeoutMs)) return false;
         std::lock_guard<std::mutex> g(m_mtx);
         m_stats.tx_frames += 1;
         m_stats.tx_bytes += len;

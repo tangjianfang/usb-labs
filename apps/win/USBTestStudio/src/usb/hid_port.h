@@ -1,5 +1,6 @@
 // hid_port.h — HID 设备访问：HidD_GetPreparsedData/HidP_GetCaps 取能力，
-// ReadFile（重叠 + QPC 计时）读输入报告，HidD_SetOutputReport 写输出报告；
+// ReadFile（重叠 + QPC 计时）读输入报告；写输出报告 = WriteFile 重叠有界
+// 主路（默认 3s，CancelIoEx+GOR 回收）+ HidD_SetOutputReport 控制传输回退；
 // hid_polling_rate_measure 以 QPC 直方图量化回报率。
 // 未真机编译，按 MSDN 口径编写。
 #pragma once
@@ -44,14 +45,23 @@ public:
                          std::wstring* err = nullptr);
 
     // 写输出报告：data[0] 为 Report ID（无报告 ID 设备传 0），长度受 OutputReportByteLength 约束。
-    // 若 FILE_FLAG_OVERLAPPED 句柄上调用失败，内部回退为“临时同步句柄”重试（见 README 不确定点）。
-    bool set_output_report(const uint8_t* data, size_t len, std::wstring* err = nullptr);
+    // 主路 = 重叠 WriteFile + 有界等待（默认 3s）：超时 → CancelIoEx 取消并回收，边界
+    // 竞态口径同 read_overlapped（GOR 成功即按成功——传输恰在超时判定与取消生效间
+    // 完成时，按失败重发会使设备收重复命令）。WriteFile 立即失败（集合无中断 OUT
+    // 管道/蓝牙 HID 传输栈等不支持该写路径，MSDN/hidapi 口径）时回退
+    // HidD_SetOutputReport 控制传输（同步、不可取消，受主机栈控制传输超时约束），
+    // 重叠句柄上再失败则内部回退“临时同步句柄”重试（见 README 不确定点）。
+    bool set_output_report(const uint8_t* data, size_t len, std::wstring* err = nullptr,
+                           unsigned timeout_ms = 3000);
 
     // 调大驱动输入报告环形缓冲，减少回报率测量丢包（HidD_SetNumInputBuffers，上限 512）
     bool set_num_input_buffers(ULONG count);
 
 private:
     bool fill_caps(std::wstring* err);
+    // set_output_report 的回退路径：HidD_SetOutputReport（同步控制传输），
+    // 重叠句柄上失败后以“临时同步句柄”再试一次
+    bool set_output_report_sync(std::vector<uint8_t>& buf, std::wstring* err);
 
     wraii::uhandle<wraii::handle_closer> m_handle;
     std::wstring m_path;

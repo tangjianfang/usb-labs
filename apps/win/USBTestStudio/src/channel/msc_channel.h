@@ -142,13 +142,15 @@ public:
         }
         if (!m_port.open_physical_drive(idx, /*write_access=*/false, err)) return false;
         m_index = idx;
-        // 能力快照（尽力而为，失败不阻断——目录已具名，通道仍可发自定义命令）
+        // 能力快照（尽力而为，失败不阻断——目录已具名，通道仍可发自定义命令）。
+        // open 在 UI 线程同步执行：探测命令同样有界（kProbeTimeoutS），病态盘最多
+        // 拖住会话打开数秒而非默认 10s×2（#71 遗留缺陷池）
         unsigned long long sectors = 0;
         unsigned blk = 0;
         m_block = 0;
-        if (m_port.read_capacity(&sectors, &blk, nullptr)) m_block = blk;
+        if (m_port.read_capacity(&sectors, &blk, nullptr, kProbeTimeoutS)) m_block = blk;
         std::string v8, p16, r4;
-        m_port.scsi_inquiry(&v8, &p16, &r4, nullptr, nullptr);
+        m_port.scsi_inquiry(&v8, &p16, &r4, nullptr, nullptr, kProbeTimeoutS);
         std::wstring id = msc_wide_ascii(v8);
         if (!p16.empty()) {
             if (!id.empty()) id += L' ';
@@ -216,7 +218,9 @@ public:
         std::lock_guard<std::mutex> g(m_mtx);
         m_cb = std::move(cb);
     }
-    // ms → 秒向上取整（MscScsi 直通超时单位为秒；0 = 端口默认 10s）
+    // ms → 秒向上取整（MscScsi 直通超时单位为秒）。默认 3s：会话台 send 即 UI
+    // 线程同步调用，超时即挂死上界（#71 遗留缺陷池——10s 默认下 NAK 盘每发一条
+    // CDB 冻结 UI 10s）；显式 0 = 恢复端口默认 10s
     void set_read_timeout(unsigned ms) noexcept override {
         m_timeout_s = ms ? (ms + 999u) / 1000u : 0u;
     }
@@ -233,7 +237,8 @@ private:
     std::wstring m_path;
     unsigned m_index = 0;
     unsigned m_block = 0;          // READ_CAPACITY 块大小（0=未知）
-    unsigned m_timeout_s = 0;      // 0=MscScsi 默认 10s
+    unsigned m_timeout_s = 3;      // 默认有界 3s（UI 线程 send 上界）；0=端口默认 10s
+    static constexpr unsigned kProbeTimeoutS = 3;   // open 时的容量/INQUIRY 探测同界
     PortT m_port;
     mutable std::mutex m_mtx;      // 保护 m_stats / m_cb
     ChannelStats m_stats;

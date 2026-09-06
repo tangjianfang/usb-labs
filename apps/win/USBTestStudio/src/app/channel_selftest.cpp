@@ -102,12 +102,15 @@ public:
         return true;
     }
 
-    bool set_output_report(const uint8_t* data, size_t len, std::wstring* err) {
+    bool set_output_report(const uint8_t* data, size_t len, std::wstring* err,
+                           unsigned timeout_ms = 3000) {
         if (!m_open) { if (err) *err = L"HID 未打开"; return false; }
         if (len == 0 || len > m_caps.output_report_len) {
             if (err) *err = L"输出报告长度超出 [1, OutputReportByteLength]";
             return false;
         }
+        last_write_timeout_ms = timeout_ms;
+        if (fail_write) { if (err) *err = L"模拟写失败（NAK 永续）"; return false; }
         if (!echo_output) return true;
         std::lock_guard<std::mutex> g(m_mtx);
         std::vector<uint8_t> rep(m_caps.output_report_len, 0);   // 同 HidPort：定长补零
@@ -119,6 +122,8 @@ public:
     bool fail_open = false;
     bool fail_read = false;              // 模拟设备拔出：读线程应退出
     bool echo_output = true;
+    bool fail_write = false;             // 模拟写路径失败（NAK 永续超时口径）
+    unsigned last_write_timeout_ms = 0;  // 通道 send 透传的写超时（#71 有界写契约）
     std::wstring m_path;
     HidCapsInfo m_caps;                  // 测试预置（真件由 open 时的 fill_caps 填充）
 
@@ -162,9 +167,12 @@ public:
         return true;
     }
 
-    bool write_pipe(const uint8_t* data, size_t len, std::wstring* err) {
+    bool write_pipe(const uint8_t* data, size_t len, std::wstring* err,
+                    unsigned timeout_ms = 3000) {
+        last_write_timeout_ms = timeout_ms;
         if (!m_open) { if (err) *err = L"WinUSB 未打开"; return false; }
         if (m_caps.out_pipe == 0) { if (err) *err = L"无数据 OUT 管道（只读设备）"; return false; }
+        if (fail_write) { if (err) *err = L"模拟写失败（NAK 永续）"; return false; }
         if (!echo_output) return true;
         std::lock_guard<std::mutex> g(m_mtx);
         m_queue.emplace_back(data, data + len);
@@ -174,6 +182,8 @@ public:
     bool fail_open = false;
     bool fail_read = false;              // 模拟设备拔出：读线程应退出
     bool echo_output = true;
+    bool fail_write = false;             // 模拟写路径失败（NAK 永续超时口径）
+    unsigned last_write_timeout_ms = 0;  // 通道 send 透传的写超时（#71 有界写契约）
     std::wstring m_path;
     WinUsbCaps m_caps;                   // 测试预置管道选型（真件由 open 时的 query_pipes 填充）
 
@@ -202,15 +212,18 @@ public:
     void close() noexcept { m_open = false; }
     bool is_open() const noexcept { return m_open; }
 
-    bool read_capacity(unsigned long long* total, unsigned* blk, std::wstring*) {
+    bool read_capacity(unsigned long long* total, unsigned* blk, std::wstring*,
+                       unsigned timeout_s = 0) {
         if (!m_open) return false;
+        last_probe_timeout_s = timeout_s;
         *total = total_sectors;
         *blk = block_size;
         return true;
     }
     bool scsi_inquiry(std::string* v, std::string* p, std::string* r, unsigned char* t,
-                      std::wstring*) {
+                      std::wstring*, unsigned timeout_s = 0) {
         if (!m_open) return false;
+        last_probe_timeout_s = timeout_s;
         if (v) *v = vendor;
         if (p) *p = product;
         if (r) *r = rev;
@@ -265,6 +278,7 @@ public:
     int last_dir = -1;
     uint32_t last_data_len = 0;
     unsigned last_timeout_s = 0;
+    unsigned last_probe_timeout_s = 0;   // open 探测（容量/INQUIRY）透传的超时秒数
 
 private:
     std::atomic<bool> m_open{false};
@@ -449,6 +463,18 @@ int wmain() {
             check(frames.size() == n_at_clear, "HID 清回调后不再调用");
         }
 
+        // 有界写契约（evolve #72）：通道 send 显式透传 kSendTimeoutMs（对抗复核
+        // 4-1：不依赖端口层默认参，防两侧默认漂移）；写失败（NAK 永续口径）不
+        // 计统计且恢复后续发——真件的超时+CancelIoEx+GOR 回收序列依赖 OS 行为
+        // 无法离线模拟，离线钉住通道层契约
+        check(ch.port().last_write_timeout_ms == 3000, "HID send 透传通道级 3s 写超时");
+        ch.port().fail_write = true;
+        check(!ch.send(rep1, sizeof rep1, &err), "HID 写失败 send 返回 false");
+        check(!err.empty(), "HID 写失败给出 err");
+        check(ch.stats().tx_frames == 3, "HID 写失败不计统计");
+        ch.port().fail_write = false;
+        check(ch.send(rep1, sizeof rep1, &err), "HID 写恢复后续发成功");
+
         ch.close();
         check(!ch.is_open(), "HID close 后未打开");
     }
@@ -624,6 +650,18 @@ int wmain() {
         check(ch.send(b, sizeof b, &err), "只出不进 send 成功");
         Sleep(120);                                     // 若误起读线程，read_pipe 立即报错退出
         check(ch.is_open(), "只出不进通道保持打开");
+
+        // 有界写契约（evolve #72，#71 签名漂移补覆盖）：透传通道级 3s 写超时
+        // （kSendTimeoutMs，不依赖端口默认参）；写失败不计统计、恢复后续发
+        // （无读线程干扰，纯写路径）
+        check(ch.port().last_write_timeout_ms == 3000, "WinUSB send 透传通道级 3s 写超时");
+        ch.port().fail_write = true;
+        check(!ch.send(b, sizeof b, &err), "WinUSB 写失败 send 返回 false");
+        check(!err.empty(), "WinUSB 写失败给出 err");
+        check(ch.stats().tx_frames == 1, "WinUSB 写失败不计统计");
+        ch.port().fail_write = false;
+        check(ch.send(b, sizeof b, &err), "WinUSB 写恢复后续发成功");
+
         ch.close();
     }
     {   // 拔出模拟：读线程退出；send 写路径独立仍成功；句柄未关仍报 is_open
@@ -768,6 +806,7 @@ int wmain() {
         ChannelStats st = ch.stats();
         check(st.tx_frames == 1 && st.tx_bytes == 6 && st.rx_frames == 1 && st.rx_bytes == 36,
               "MSC INQUIRY 统计");
+        check(ch.port().last_timeout_s == 3, "MSC 默认 3s 有界超时（UI 线程 send 上界）");
 
         const uint8_t tur[6] = {0x00, 0, 0, 0, 0, 0};
         check(ch.send(tur, 6, &err), "MSC send TEST_UNIT_READY 成功");
@@ -816,6 +855,7 @@ int wmain() {
         ch.close();
         check(!ch.is_open(), "MSC close 后未打开");
         check(ch.open(&err), "MSC 重开成功");
+        check(ch.port().last_probe_timeout_s == 3, "MSC open 探测（容量/INQUIRY）透传 3s 有界");
         ch.close();
     }
 

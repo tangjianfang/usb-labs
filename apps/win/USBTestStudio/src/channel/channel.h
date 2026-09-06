@@ -36,6 +36,12 @@ struct ChannelDesc {
 
 using ReceiveCallback = std::function<void(const std::vector<uint8_t>&)>;
 
+// 通道层 send 的写超时上界（ms，evolve #71/#72）：send 在 UI 线程同步执行，
+// 设备 NAK 永续时等待必须有界——各通道实现须把此常量显式透传给端口层写接口
+//（HidPort::set_output_report / WinUsbPort::write_pipe 的 timeout_ms 形参），
+// 不依赖端口层默认值（防两侧默认漂移；通道→端口契约由 channel_selftest 钉住）
+constexpr unsigned kSendTimeoutMs = 3000;
+
 class IChannel {
 public:
     virtual ~IChannel() = default;

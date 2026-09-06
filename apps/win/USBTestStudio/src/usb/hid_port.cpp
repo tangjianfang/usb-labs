@@ -1,4 +1,6 @@
-// hid_port.cpp — HID 重叠 I/O 与回报率测量。未真机编译，按 MSDN 口径编写。
+// hid_port.cpp — HID 重叠 I/O 与回报率测量：读=ReadFile 重叠轮片，写=WriteFile
+// 重叠有界（3s 默认）主路 + HidD_SetOutputReport 控制传输回退。
+// 未真机编译，按 MSDN 口径编写。
 #include "usb/hid_port.h"
 
 #include <cstdio>
@@ -191,7 +193,8 @@ bool HidPort::read_overlapped(std::vector<uint8_t>& report, unsigned timeout_ms,
     return true;
 }
 
-bool HidPort::set_output_report(const uint8_t* data, size_t len, std::wstring* err) {
+bool HidPort::set_output_report(const uint8_t* data, size_t len, std::wstring* err,
+                                unsigned timeout_ms) {
     if (!m_handle.valid()) {
         if (err) *err = L"HID 未打开";
         return false;
@@ -209,7 +212,72 @@ bool HidPort::set_output_report(const uint8_t* data, size_t len, std::wstring* e
     std::vector<uint8_t> buf(m_caps.output_report_len, 0);
     ::memcpy(buf.data(), data, len);
 
-    // HidD_SetOutputReport 内部为同步控制传输。若在 FILE_FLAG_OVERLAPPED 句柄上调用失败，
+    // 主路：重叠 WriteFile（走中断 OUT 管道，MSDN/hidapi 口径）。send 为同步语义但
+    // 等待有界——HID 设备不收 OUT 报告（NAK 永续）是 bring-up 常态，无限等待会挂死
+    // 调用线程（会话台 send 即 UI 线程）。
+    OVERLAPPED ov{};
+    ov.hEvent = ::CreateEventW(nullptr, TRUE /*手动复位*/, FALSE, nullptr);
+    if (ov.hEvent == nullptr) {
+        if (err) *err = wraii::win_err(L"CreateEventW", ::GetLastError());
+        return false;
+    }
+    wraii::uhandle<wraii::handle_closer> evt(ov.hEvent);
+
+    DWORD done = 0;
+    if (!::WriteFile(m_handle.get(), buf.data(), static_cast<DWORD>(buf.size()), nullptr,
+                     &ov)) {
+        DWORD e = ::GetLastError();
+        if (e != ERROR_IO_PENDING) {
+            // WriteFile 写路径不可用（无中断 OUT 管道/蓝牙 HID/只读句柄等）→ 回退
+            // HidD_SetOutputReport 控制传输（其自身错误覆盖呈现）
+            return set_output_report_sync(buf, err);
+        }
+        DWORD wait = ::WaitForSingleObject(ov.hEvent, timeout_ms);
+        if (wait == WAIT_TIMEOUT) {
+            // 超时：取消在途写并回收。边界竞态：超时判定与取消生效之间写可能已完成
+            // ——GOR 成功且整报告完成即按成功（否则重发会使设备收重复报告）
+            ::CancelIoEx(m_handle.get(), &ov);
+            DWORD done2 = 0;
+            if (::GetOverlappedResult(m_handle.get(), &ov, &done2, TRUE)
+                && done2 == buf.size())
+                return true;
+            if (err) *err = L"写超时：设备未接收输出报告（NAK 永续？）";
+            return false;
+        }
+        if (wait != WAIT_OBJECT_0) {
+            // WAIT_FAILED 等：先取码，再取消在途 I/O 并回收（避免 RAII 关事件后留孤儿 IO）
+            DWORD e2 = ::GetLastError();
+            ::CancelIoEx(m_handle.get(), &ov);
+            DWORD dummy = 0;
+            ::GetOverlappedResult(m_handle.get(), &ov, &dummy, TRUE);
+            if (err) *err = wraii::win_err(L"WaitForSingleObject", e2);
+            return false;
+        }
+        if (!::GetOverlappedResult(m_handle.get(), &ov, &done, FALSE)) {
+            DWORD e2 = ::GetLastError();
+            if (e2 == ERROR_OPERATION_ABORTED) {
+                if (err) *err = L"写被取消（竞态窗口，按失败处理）";
+                return false;
+            }
+            if (err) *err = wraii::win_err(L"GetOverlappedResult", e2);
+            return false;
+        }
+    } else if (!::GetOverlappedResult(m_handle.get(), &ov, &done, FALSE)) {
+        // 句柄未进 PENDING 即完成（不太可能，仍按完成处理）
+        if (err) *err = wraii::win_err(L"GetOverlappedResult", ::GetLastError());
+        return false;
+    }
+
+    if (done != buf.size()) {
+        if (err) *err = wraii::fmt_v(L"短写：%lu / %zu 字节", done, buf.size());
+        return false;
+    }
+    return true;
+}
+
+bool HidPort::set_output_report_sync(std::vector<uint8_t>& buf, std::wstring* err) {
+    // 回退路径：HidD_SetOutputReport 内部为同步 SET_REPORT 控制传输（不可取消，
+    // 有界性由主机栈控制传输超时保证）。若在 FILE_FLAG_OVERLAPPED 句柄上调用失败，
     // 回退为“临时同步句柄”再试一次（组合行为以 MSDN 为准，见 README 不确定点）。
     if (::HidD_SetOutputReport(m_handle.get(), buf.data(),
                                static_cast<ULONG>(buf.size())) != FALSE)

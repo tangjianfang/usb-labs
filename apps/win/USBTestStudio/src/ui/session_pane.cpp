@@ -328,8 +328,10 @@ void SessionPane::relayout(UINT dpi) noexcept {
 // ---------------------------------------------------------------------------
 // 动作：发送 / 历史回选 / 接收入账 / 渲染
 // ---------------------------------------------------------------------------
-void SessionPane::do_send() {
+void SessionPane::do_send(bool* transport_failed) {
+    if (transport_failed) *transport_failed = false;
     if (!m_channel || !m_channel->is_open()) {
+        if (transport_failed) *transport_failed = true;   // 传输层失败（周期据此停）
         m_note = L"通道未打开";
         status_refresh();
         return;
@@ -341,7 +343,7 @@ void SessionPane::do_send() {
                                  : session_codec::SendEncoding::auto_detect;
     const auto r = session_codec::parse_send_text(text, mode);
     if (!r.error.empty()) {
-        m_note = r.error;
+        m_note = r.error;    // 内容问题：不算传输层失败，周期不因此停
         status_refresh();
         return;
     }
@@ -362,6 +364,7 @@ void SessionPane::do_send() {
         m_note = n;
         render_poll();
     } else {
+        if (transport_failed) *transport_failed = true;
         m_note = L"发送失败：" + err;
     }
     status_refresh();
@@ -453,7 +456,16 @@ void SessionPane::status_refresh() {
 }
 
 void SessionPane::tick(unsigned long long now) {
-    if (m_core.periodic.armed() && m_core.periodic.due(now)) do_send();
+    if (!m_core.periodic.armed() || !m_core.periodic.due(now)) return;
+    bool transport_failed = false;
+    do_send(&transport_failed);
+    if (!transport_failed) return;
+    // 传输层失败 → 周期自动停止：NAK 永续的设备会让每次发送都顶满写超时（3s），
+    // 继续打节拍 = UI 近乎持续冻结（#71 遗留缺陷池；解析错误/空内容不触发）
+    m_core.periodic.disarm();
+    ::SendMessageW(m_chkPeriodic, BM_SETCHECK, BST_UNCHECKED, 0);
+    m_note = L"周期已自动停止·" + m_note;
+    status_refresh();
 }
 
 // ---------------------------------------------------------------------------
