@@ -20,13 +20,6 @@ std::wstring drive_device_path(unsigned index) {
     return buf;
 }
 
-unsigned be32(const uint8_t* p) {
-    return (static_cast<unsigned long long>(p[0]) << 24) |
-           (static_cast<unsigned long long>(p[1]) << 16) |
-           (static_cast<unsigned long long>(p[2]) << 8) |
-           static_cast<unsigned long long>(p[3]);
-}
-
 std::string trim_ascii(const char* s, size_t n) {
     std::string out(s, n);
     while (!out.empty() && (out.back() == ' ' || out.back() == '\0')) out.pop_back();
@@ -174,57 +167,17 @@ bool MscScsi::scsi_inquiry(std::string* vendor8, std::string* product16, std::st
 
 bool MscScsi::read_capacity(unsigned long long* total_sectors, unsigned* block_size,
                             std::wstring* err, unsigned timeout_s) {
-    // CDB10 READ_CAPACITY(0x25)
-    uint8_t cdb[10] = {0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    uint8_t data[8] = {};
-    uint8_t sense[32] = {};
-    unsigned char status = 0;
-    if (!pass_through(cdb, 10, data, sizeof(data), sense, &status, SCSI_IOCTL_DATA_IN, timeout_s,
-                      err))
-        return false;
-    unsigned long long last_lba = be32(data);
-    unsigned blk = be32(data + 4);
-    if (last_lba == 0xFFFFFFFFull) {
-        if (err) *err = L"容量超出 READ_CAPACITY(10) 表达范围（>2TB，需 READ_CAPACITY(16)，未实现）";
-        return false;
-    }
-    if (blk == 0) {
-        if (err) *err = L"READ_CAPACITY 返回块大小 0";
-        return false;
-    }
-    if (total_sectors) *total_sectors = last_lba + 1;
-    if (block_size) *block_size = blk;
-    return true;
+    // 内核见 msc_capacity_probe_impl（READ_CAPACITY(10)→哨兵→(16)，#75）；
+    // auto_detect/引擎容量/msc_read_verify/通道 open/msc_enum 五调用点 + read10
+    // 经此统一获得 >2TB 支持（对抗复核 P1：委托接线为审读级保证，真机钉在
+    // 验收表 D11；假件侧同形态委托可钉内核本身）
+    return msc_capacity_probe_impl<MscScsi>(*this, total_sectors, block_size, err, timeout_s);
 }
 
 bool MscScsi::read10(unsigned long long lba, unsigned blocks, std::vector<uint8_t>& out,
                      std::wstring* err) {
-    unsigned blk = 0;
-    unsigned long long total = 0;
-    if (!read_capacity(&total, &blk, err, kMscProbeTimeoutS)) return false;
-    if (blocks == 0 || blocks > 1024) {
-        if (err) *err = L"READ10 块数越界（1..1024）";
-        return false;
-    }
-    if (lba + blocks > total) {
-        if (err) *err = wraii::fmt_v(L"LBA %llu+%u 超出容量 %llu", lba, blocks, total);
-        return false;
-    }
-    uint32_t want = static_cast<uint32_t>(blocks) * blk;
-    out.assign(want, 0);
-
-    // CDB10 READ10(0x28)：LBA 大端 [2..5]，传输块数大端 [7..8]
-    uint8_t cdb[10] = {0x28, 0x00, 0, 0, 0, 0, 0x00, 0, 0, 0x00};
-    cdb[2] = static_cast<uint8_t>((lba >> 24) & 0xFF);
-    cdb[3] = static_cast<uint8_t>((lba >> 16) & 0xFF);
-    cdb[4] = static_cast<uint8_t>((lba >> 8) & 0xFF);
-    cdb[5] = static_cast<uint8_t>(lba & 0xFF);
-    cdb[7] = static_cast<uint8_t>((blocks >> 8) & 0xFF);
-    cdb[8] = static_cast<uint8_t>(blocks & 0xFF);
-
-    uint8_t sense[32] = {};
-    unsigned char status = 0;
-    return pass_through(cdb, 10, out.data(), want, sense, &status, SCSI_IOCTL_DATA_IN, 20, err);
+    // 内核见 msc_read_blocks_impl（容量探测同源 + READ(10)/(16) 选路，#75）
+    return msc_read_blocks_impl<MscScsi>(*this, lba, blocks, out, err);
 }
 
 // ---------------------------------------------------------------------------

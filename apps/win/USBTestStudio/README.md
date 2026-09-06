@@ -135,7 +135,7 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 
 1. **未真机运行**——工程保持 MSVC 五靶编译绿（#64 起零告警，纯逻辑自测离线可跑），但设备访问层未经真机联调；首次真机联调预计需按下方不确定清单小幅修正。
 2. `msc_write_verify`（DESTRUCTIVE 写读校验）未实现；`line_coding`（WinUSB 控制传输）与 `dfu_verify`（外部工具）未实现，执行到即 FAIL。
-3. `READ_CAPACITY(10)` 上限 2TB；更大盘需 `READ_CAPACITY(16)`（service action 0x10），未实现。
+3. ~~`READ_CAPACITY(10)` 上限 2TB，更大盘未支持~~ 已收口（evolve #75）：RC10 哨兵（last LBA=0xFFFFFFFF）自动升 `READ_CAPACITY(16)`（0x9E/SA=0x10）；READ10 LBA 越 32 位自动选 `READ(16)`（0x88），消除高 LBA 静默截断。内核与选路经假件真钉（通道 open/auto_detect 用例真实穿越内核，变异即红）；`MscScsi` 委托行为离线结构性不可钉，属审读级保证——>2TB 真机验证见验收表 D11。
 4. `hid_report_loopback`/`serial_loopback` 依赖回显固件或工装短接，纯软件无法自测。
 5. 报告 `started` 用本地时间（同 Python 版）；跨时区 MES 需自行约定时区。
 6. 启动时后台扫描线程若恰逢窗口销毁，存在一次小分配的理论泄漏（PostMessage 成功但消息未被处理）；量级为单设备列表，工程上可接受。
@@ -166,6 +166,7 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 | 19 | `WinUsb_WritePipe` 超时后 `WinUsb_AbortPipe` 取消 | EP-4 S5 写路径有界等待（evolve #71） | OUT 传输被取消时设备侧可能已收部分字节（帧不完整、上层按失败处理）；超时判定与中止生效间的完成竞态（代码已按 GOR 结果兜底，需真机证实）；AbortPipe 本身失败时 `GetOverlappedResult(bWait=TRUE)` 理论可无限等待（回收路径返值未设防，低概率）；3s 默认对慢设备（Flash 缓冲写）是否偏紧 |
 | 20 | `WriteFile`（HID 输出报告）+ `CancelIoEx` 超时回收 | EP-4 HID 写路径有界等待（evolve #72） | 集合无中断 OUT 管道/蓝牙 HID 时 `WriteFile` 的失败码口径（代码按"立即失败即回退 `HidD_SetOutputReport` 控制传输"处理，MSDN/hidapi 口径需真机证实）；超时判定与取消生效间的完成竞态（代码已按 GOR 结果兜底，口径同 #7/#16）；`CancelIoEx` 后 `GetOverlappedResult(bWait=TRUE)` 若驱动迟不兑现取消理论可无限等待（同 #19 低概率残留）；`HidD_SetOutputReport` 同步控制传输在主机栈的实际超时上界（不可取消；evolve #73 起仅瞬时失败 <1s 才以临时同步句柄二次尝试，慢失败不重试——残余为单次控制传输本身的主机栈上界，病态设备下仍可能超 3s） |
 | 21 | MSC 会话 3s 默认直通超时（`SCSI_PASS_THROUGH_DIRECT.TimeOutValue`） | EP-4 MSC 会话 send/open 有界（evolve #72） | 3s 对慢速盘（螺旋 HDD 冷启动/大块 READ10）是否偏紧；超时后设备侧命令可能仍在执行——重发同命令的副作用边界（只读通道影响有限） |
+| 22 | `READ_CAPACITY(16)`（0x9E/SA=0x10）与 `READ(16)`（0x88） | EP-4 >2TB 盘支持（evolve #75） | USB-SATA/USB-桥接芯片对 16 字节 CDB 命令的支持差异（部分老桥只可靠支持 10 字节 CDB）；RC10 哨兵在精确 0xFFFFFFFF 扇区盘上的触发；验收表 D11 钉 |
 
 ## 9. 文件结构
 
@@ -180,9 +181,10 @@ USBTestStudio/
     ├── usb/device_enumerator.*   USB/HID 接口枚举（SetupDi + CfgMgr32）
     ├── usb/hid_port.*            HID caps / 重叠读 / 输出报告 / QPC 回报率直方图
     ├── usb/serial_port.*         DCB / 重叠读写 / 环回 / PD 遥测（key=value）
-    ├── usb/msc_scsi.*            SCSI 直通 INQUIRY/READ_CAPACITY/READ10 + sense（只读；探测命令
-    │                             3s 有界单一事实源 kMscProbeTimeoutS——auto_detect/引擎/只读校验
-    │                             孪生探测路径同界收口，探测内核模板化可注假件自测，evolve #74）
+    ├── usb/msc_scsi.*            SCSI 直通 INQUIRY/READ_CAPACITY(10→16 哨兵回退)/READ(10/16 选路)
+    │                             + sense（只读；探测命令 3s 有界单一事实源 kMscProbeTimeoutS——
+    │                             auto_detect/引擎/只读校验孪生探测路径同界收口，探测内核模板化
+    │                             可注假件自测，evolve #74；>2TB 收口 evolve #75）
     ├── usb/winusb_port.*         EP-4 S5 WinUSB 批量/中断管道（接口 0 + 管道选型 + 重叠读写；
     │                             VID/PID 路径解析与选型为纯逻辑，离线自测覆盖）
     ├── channel/channel.h         EP-4 会话台统一通道契约 IChannel（open/send/on_receive/stats）

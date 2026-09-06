@@ -212,15 +212,16 @@ public:
     void close() noexcept { m_open = false; }
     bool is_open() const noexcept { return m_open; }
 
-    bool read_capacity(unsigned long long* total, unsigned* blk, std::wstring*,
+    bool read_capacity(unsigned long long* total, unsigned* blk, std::wstring* err,
                        unsigned timeout_s = 0) {
         if (!m_open) return false;
         last_probe_timeout_s = timeout_s;
         s_last_probe_timeout_s = timeout_s;
         if (m_index < s_cap_from) return false;   // 按盘号模拟容量探测失败/超时
-        *total = total_sectors;
-        *blk = block_size;
-        return true;
+        // 与 MscScsi 同形态委托内核（对抗复核 P1，evolve #75）：通道 open /
+        // auto_detect 既有用例自此真实穿越 msc_capacity_probe_impl，内核回归在
+        // 此一并变红；容量由 pass_through 的 0x25/0x9E 应答旋钮（cap10_*/cap16_*）承接
+        return msc_capacity_probe_impl<MockMscPort>(*this, total, blk, err, timeout_s);
     }
     bool scsi_inquiry(std::string* v, std::string* p, std::string* r, unsigned char* t,
                       std::wstring*, unsigned timeout_s = 0) {
@@ -265,19 +266,48 @@ public:
             return false;
         }
         if (scsi_status) *scsi_status = 0;
+        auto* out = static_cast<uint8_t*>(data);
+        // 容量命令应答（msc_capacity_probe_impl 的直通路径，evolve #75）：
+        // 0x25 回 8 字节（last LBA BE32+块长 BE32）；0x9E/SA=0x10 回 32 字节
+        //（last LBA BE64+块长 BE32）——大端编码与 SBC-3 一致。
+        if (cdb_len == 10 && cdb[0] == 0x25) {
+            ++cap10_calls;
+            if (out && data_len >= 8) {
+                put_be32(out, static_cast<uint32_t>(cap10_last_lba));
+                put_be32(out + 4, cap10_block);
+            }
+            return true;
+        }
+        if (cdb_len == 16 && cdb[0] == 0x9E && cdb[1] == 0x10) {
+            ++cap16_calls;
+            if (cap16_fail) {             // 模拟 >2TB 盘 RC16 失败（留痕断言用）
+                if (err) *err = L"模拟 READ_CAPACITY(16) 失败";
+                return false;
+            }
+            if (out && data_len >= 12) {
+                for (unsigned i = 0; i < 8; ++i)
+                    out[i] = uint8_t((cap16_last_lba >> (56 - i * 8)) & 0xFF);
+                put_be32(out + 8, cap16_block);
+            }
+            return true;
+        }
         if (data && data_len > 0 && data_dir == kMscDirIn) {
-            auto* out = static_cast<uint8_t*>(data);
             for (uint32_t i = 0; i < data_len; ++i) out[i] = uint8_t(i) ^ cdb[0];
         }
         return true;
+    }
+
+    static void put_be32(uint8_t* p, uint32_t v) {
+        p[0] = uint8_t(v >> 24);
+        p[1] = uint8_t(v >> 16);
+        p[2] = uint8_t(v >> 8);
+        p[3] = uint8_t(v);
     }
 
     bool fail_open = false;
     bool fail_ioctl = false;              // 模拟 OS 层直通失败
     unsigned char force_status = 0;       // 非 0 → 模拟该 SCSI 状态（CHECK CONDITION）
     unsigned char sense_key = 0x05, sense_asc = 0x21;   // ILLEGAL REQUEST / LBA 越界
-    unsigned long long total_sectors = 15667200;       // ≈8GB @512B
-    unsigned block_size = 512;
     std::string vendor = "MOCKLAB", product = "UDISK-300", rev = "1.0";
     unsigned m_index = 0;
     bool m_last_write_access = true;
@@ -286,6 +316,14 @@ public:
     uint32_t last_data_len = 0;
     unsigned last_timeout_s = 0;
     unsigned last_probe_timeout_s = 0;   // open 探测（容量/INQUIRY）透传的超时秒数
+    // 容量直通应答旋钮（pass_through 的 0x25/0x9E 分支，evolve #75）；
+    // 默认 ≈8GB 正常盘（read_capacity 已收编为经内核委托，此为唯一容量旋钮）
+    unsigned long long cap10_last_lba = 15667199;
+    unsigned cap10_block = 512;
+    unsigned long long cap16_last_lba = 0x123456789ull;   // ≈2.5TB 盘（哨兵回退用例）
+    unsigned cap16_block = 512;
+    bool cap16_fail = false;
+    unsigned cap10_calls = 0, cap16_calls = 0;
     // auto_detect 假件旋钮（msc_auto_detect_impl 每轮默认构造新实例，按盘号的
     // 行为差异只能经静态配置表达；默认 0 = 全盘 USB/容量恒成功，不影响既有用例）
     static inline unsigned s_usb_from = 0;        // 盘号 ≥ 此值才算 BusTypeUsb
@@ -755,6 +793,13 @@ int wmain() {
         check(msc_plan_cdb(rcap, 10, 512).dir == kMscDirIn
                   && msc_plan_cdb(rcap, 10, 512).resp_len == 8,
               "CDB 计划 READ_CAPACITY 恒 8");
+        const uint8_t rcap16[16] = {0x9E, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0};
+        check(msc_plan_cdb(rcap16, 16, 512).dir == kMscDirIn
+                  && msc_plan_cdb(rcap16, 16, 512).resp_len == 32,
+              "CDB 计划 READ_CAPACITY(16) 分配长度大端 [10..13]");
+        const uint8_t sa_other[16] = {0x9E, 0x11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0};
+        check(msc_plan_cdb(sa_other, 16, 512).dir == kMscDirUnspec,
+              "CDB 计划 0x9E 其余 service action 按无数据直通");
         uint8_t read10[10] = {0x28, 0, 0, 0, 0, 0, 0, 0x00, 0x04, 0};
         check(msc_plan_cdb(read10, 10, 512).dir == kMscDirIn
                   && msc_plan_cdb(read10, 10, 512).resp_len == 4 * 512,
@@ -767,6 +812,10 @@ int wmain() {
         read10[8] = 0xFF;
         check(msc_plan_cdb(read10, 10, 512).resp_len == (1u << 20),
               "CDB 计划巨型 READ 封顶 1MiB");
+        const uint8_t read16[16] = {0x88, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 3, 0, 2, 0, 0};
+        check(msc_plan_cdb(read16, 16, 512).dir == kMscDirIn
+                  && msc_plan_cdb(read16, 16, 512).resp_len == 2 * 512,
+              "CDB 计划 READ16 块数大端 [12..13]（group [10..11] 不计入，#75）");
         const uint8_t tur[6] = {0x00, 0, 0, 0, 0, 0};
         check(msc_plan_cdb(tur, 6, 512).dir == kMscDirUnspec
                   && msc_plan_cdb(tur, 6, 512).resp_len == 0,
@@ -894,6 +943,106 @@ int wmain() {
         check(msc_auto_detect_impl<MockMscPort>() == -1, "auto_detect 无 USB 盘返回 -1");
         MockMscPort::s_usb_from = 0;   // 还原全局默认（后续若有用例不受旋钮影响）
         MockMscPort::s_cap_from = 0;
+    }
+    {   // msc_capacity_probe_impl：RC10 → 哨兵 → RC16（SBC-3，#75 关闭 README 限制 #3）
+        MockMscPort p;
+        check(p.open_physical_drive(0, false, nullptr), "容量内核 假件开盘");
+        unsigned long long total = 0;
+        unsigned blk = 0;
+        std::wstring err;
+        check(msc_capacity_probe_impl(p, &total, &blk, &err, 3),
+              "容量内核 ≤2TB 盘 RC10 即成功");
+        check(total == 15667200 && blk == 512, "容量内核 RC10 扇区/块大小解析");
+        check(p.cap10_calls == 1 && p.cap16_calls == 0, "容量内核 ≤2TB 不升 RC16");
+        check(p.last_timeout_s == 3, "容量内核 RC10 超时透传（≠假件默认 0）");
+        check(p.last_dir == kMscDirIn, "容量内核 RC10 方向 IN");
+
+        p.cap10_last_lba = 0xFFFFFFFFull;            // >2TB 哨兵（SBC-3 口径）
+        p.cap16_last_lba = 0x123456789ull;           // ≈2.5TB 盘
+        check(msc_capacity_probe_impl(p, &total, &blk, &err, 3), "容量内核 哨兵盘升 RC16 成功");
+        check(total == 0x12345678Aull && blk == 512, "容量内核 RC16 BE64 扇区解析");
+        check(p.cap10_calls == 2 && p.cap16_calls == 1, "容量内核 哨兵盘恰一次 RC16");
+        check(p.last_cdb.size() == 16 && p.last_cdb[0] == 0x9E && p.last_cdb[1] == 0x10,
+              "容量内核 RC16 CDB 16 字节 0x9E/SA=0x10");
+        check(p.last_cdb[13] == 32, "容量内核 RC16 分配长度 32 于大端 [10..13]");
+        check(p.last_data_len == 32, "容量内核 RC16 直通缓冲 32");
+        check(p.last_timeout_s == 3, "容量内核 RC16 超时同界透传（探测上界不漂移）");
+
+        p.cap16_fail = true;                         // RC16 失败 → false + 留痕
+        err.clear();
+        check(!msc_capacity_probe_impl(p, &total, &blk, &err, 3), "容量内核 RC16 失败回 false");
+        check(err.find(L"READ_CAPACITY(16)（>2TB）") != std::wstring::npos,
+              "容量内核 RC16 失败留痕命令名（内核前缀，非假件文案）");
+
+        p.cap16_fail = false;
+        p.cap10_last_lba = 100;                      // RC10 块长 0（≤2TB 分支拒绝）
+        p.cap10_block = 0;
+        check(!msc_capacity_probe_impl(p, &total, &blk, &err, 3)
+                  && err.find(L"块大小 0") != std::wstring::npos,
+              "容量内核 RC10 块长 0 拒绝");
+        p.cap10_last_lba = 0xFFFFFFFFull;            // RC16 块长 0（哨兵分支拒绝）
+        p.cap10_block = 512;
+        p.cap16_block = 0;
+        check(!msc_capacity_probe_impl(p, &total, &blk, &err, 3)
+                  && err.find(L"READ_CAPACITY(16) 返回块大小 0") != std::wstring::npos,
+              "容量内核 RC16 块长 0 拒绝");
+    }
+    {   // msc_read_cdb：READ(10)/(16) 选路与大端编码（纯逻辑，#75）
+        uint8_t cdb[16] = {};
+        uint8_t n = 0;
+        check(msc_read_cdb(0x12345678, 4, cdb, &n) == 0x28 && n == 10,
+              "read CDB ≤32 位 LBA 用 READ10");
+        check(cdb[2] == 0x12 && cdb[3] == 0x34 && cdb[4] == 0x56 && cdb[5] == 0x78,
+              "read CDB READ10 LBA 大端 [2..5]");
+        check(cdb[7] == 0 && cdb[8] == 4, "read CDB READ10 块数大端 [7..8]");
+        check(msc_read_cdb(0xFFFFFFFFull, 1, cdb, &n) == 0x28 && n == 10,
+              "read CDB 最高 LBA=0xFFFFFFFF 仍 READ10（边界含端）");
+        check(msc_read_cdb(0x100000000ull, 1, cdb, &n) == 0x88 && n == 16,
+              "read CDB LBA=0x100000000 升 READ16");
+        check(cdb[5] == 1 && cdb[2] == 0 && cdb[6] == 0 && cdb[9] == 0,
+              "read CDB READ16 LBA 大端 8 字节（2^32 落 [5]，低 32 位同 READ10 源）");
+        check(cdb[12] == 0 && cdb[13] == 1, "read CDB READ16 块数大端 [12..13]");
+        check(msc_read_cdb(0xFFFFFFFFull, 2, cdb, &n) == 0x88,
+              "read CDB LBA+块数越 32 位升 READ16");
+        check(msc_read_cdb(0x123456789ABCDEF0ull, 1, cdb, &n) == 0x88 && cdb[2] == 0x12
+                  && cdb[9] == 0xF0,
+              "read CDB READ16 64 位 LBA 首尾字节落 [2]/[9]");
+    }
+    {   // msc_read_blocks_impl：容量同源 + READ(10)/(16) 选路接线（对抗复核 P2，#75）
+        MockMscPort p;
+        p.open_physical_drive(0, false, nullptr);
+        std::vector<uint8_t> out;
+        std::wstring err;
+        check(msc_read_blocks_impl(p, 100, 4, out, &err), "read 内核 低 LBA READ10 成功");
+        check(p.last_cdb.size() == 10 && p.last_cdb[0] == 0x28, "read 内核 低 LBA 仍 READ10");
+        check(out.size() == 4 * 512 && out[1] == (1 ^ 0x28), "read 内核 数据帧图案+长度");
+
+        p.cap10_last_lba = 0xFFFFFFFFull;            // >2TB：容量升 RC16，读选 READ16
+        p.cap16_last_lba = 0x123456789ull;
+        check(msc_read_blocks_impl(p, 0x100000000ull, 2, out, &err),
+              "read 内核 高 LBA READ16 成功");
+        check(p.last_cdb.size() == 16 && p.last_cdb[0] == 0x88,
+              "read 内核 高 LBA 发 16 字节 READ16");
+        check(p.cap10_calls == 2 && p.cap16_calls == 1,
+              "read 内核 容量 RC10+RC16 探测各恰一次");
+        check(out.size() == 2 * 512, "read 内核 READ16 长度块数×块长");
+
+        err.clear();
+        check(!msc_read_blocks_impl(p, 0x12345678Aull, 1, out, &err), "read 内核 越容量拒绝");
+        check(err.find(L"超出容量") != std::wstring::npos, "read 内核 越容量留痕");
+        check(!msc_read_blocks_impl(p, 0, 0, out, &err), "read 内核 0 块拒绝");
+        check(!msc_read_blocks_impl(p, 0, 1025, out, &err), "read 内核 1025 块拒绝");
+    }
+    {   // 通道 open 的 >2TB 容量行（假件同形态委托，内核真实穿越，对抗复核 P1）
+        TestMsc ch(L"\\\\.\\PhysicalDrive4");
+        ch.port().cap10_last_lba = 0xFFFFFFFFull;
+        ch.port().cap16_last_lba = 0x123456789ull;   // ≈2502GB
+        std::wstring err;
+        check(ch.open(&err), ">2TB 盘 open 成功");
+        check(ch.desc().display.find(L"2502.00GB") != std::wstring::npos
+                  && ch.desc().display.find(L"512B") != std::wstring::npos,
+              ">2TB 容量行显示 RC16 真值（0x12345678A 扇区×512B）");
+        check(ch.port().cap16_calls >= 1, ">2TB open 探测实际发出 RC16");
     }
 
     printf("channel_selftest: %d/%d PASS\n", g_pass, g_pass);

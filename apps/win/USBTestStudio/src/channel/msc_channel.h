@@ -30,7 +30,8 @@ struct MscCdbPlan {
 
 // CDB 操作码 → 数据方向/响应长度（SPC-4/SBC-3 常用命令子集）：
 //   IN：INQUIRY/REQUEST_SENSE/MODE_SENSE(6) 长度取 cdb[4]，MODE_SENSE(10) 取
-//       大端 [7..8]，READ_CAPACITY(10) 恒 8，READ(10/12/16) = 块数×block_size
+//       大端 [7..8]，READ_CAPACITY(10) 恒 8，READ_CAPACITY(16)（0x9E/SA=0x10）取
+//       大端 [10..13]，READ(10/12/16) = 块数×block_size
 //       （block_size 由 open 时 READ_CAPACITY 采得；0=未知则长度置 0）
 //   OUT：FORMAT UNIT/MODE SELECT(6,10)/SEND DIAGNOSTIC/WRITE(10,12,16)——只读通道拒收
 //   未收录操作码按"无数据"直通（状态/SENSE 仍回）——自定义命令可发。
@@ -61,6 +62,14 @@ inline MscCdbPlan msc_plan_cdb(const uint8_t* cdb, size_t len, unsigned block_si
             p.dir = kMscDirIn;
             p.resp_len = 8;
             break;
+        case 0x9E:                              // SERVICE ACTION IN：SA=0x10 为 READ
+            if (cdb[1] == 0x10) {              // CAPACITY(16)，分配长度大端 [10..13]
+                p.dir = kMscDirIn;             //（#75：>2TB 盘经发送框探容量的入口）
+                p.resp_len = be32(10);
+            } else {
+                p.dir = kMscDirUnspec;         // 其余 service action 未收录，按无数据直通
+            }
+            break;
         case 0x28:                              // READ(10)：块数大端 [7..8]
             p.dir = kMscDirIn;
             p.resp_len = block_size ? be16(7) * uint32_t(block_size) : 0;
@@ -69,9 +78,9 @@ inline MscCdbPlan msc_plan_cdb(const uint8_t* cdb, size_t len, unsigned block_si
             p.dir = kMscDirIn;
             p.resp_len = block_size ? be32(6) * uint32_t(block_size) : 0;
             break;
-        case 0x88:                              // READ(16)：块数大端 [10..13]
-            p.dir = kMscDirIn;
-            p.resp_len = block_size ? be32(10) * uint32_t(block_size) : 0;
+        case 0x88:                              // READ(16)：块数大端 [12..13]
+            p.dir = kMscDirIn;                 //（[10..11] 为 GROUP NUMBER，不计——对抗
+            p.resp_len = block_size ? be16(12) * uint32_t(block_size) : 0;  // 复核 P6，#75）
             break;
         case 0x04:                              // FORMAT UNIT
         case 0x15:                              // MODE SELECT(6)
