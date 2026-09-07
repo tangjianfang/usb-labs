@@ -4,6 +4,8 @@
 """
 import time
 
+from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+
 HANDLERS = {}
 
 

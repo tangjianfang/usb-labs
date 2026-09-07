@@ -1,6 +1,6 @@
 # usbtest 状态矩阵（诚实清单）
 
-> 更新：2026-09-05（evolve 终局）。状态定义见文末。
+> 更新：2026-09-05（evolve 终局）；2026-09-07（evolve #77：六真实后端漏导入 StepResult 收口 + 复核硬化三处——run_plan 无 open_device 后端派发前崩溃/UUID 全形整串匹配/notify 无 HOGP 干净失败，离线自测 tests/test_backends.py 26 例 CI 常绿）。状态定义见文末。
 
 ## 一、处理器 × 验证状态
 

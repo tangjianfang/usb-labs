@@ -25,6 +25,8 @@ jobs:
           exit $fail
       - name: MSC 参考实现离线自测
         run: python tools/usbtest/tests/test_msc.py
+      - name: 六产测后端离线自测
+        run: python tools/usbtest/tests/test_backends.py
       - name: usbsim 协议仿真器自测
         run: python simulator/tests/test_sim.py
       - name: 轻量校验（链接/围栏）

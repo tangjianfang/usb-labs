@@ -1,6 +1,8 @@
 """UVC 产测后端：格式/描述符核对（pyusb）+ 可选帧采集（OpenCV）。
 依赖: pip install pyusb；帧采集另需 opencv-python（可选）。
 """
+from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+
 HANDLERS = {}
 
 

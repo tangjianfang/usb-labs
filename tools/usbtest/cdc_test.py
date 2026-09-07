@@ -1,7 +1,7 @@
 """CDC 产测后端：串口环回（工装）、线路编码读写、DFU 校验流程。
 依赖: pip install pyserial pyusb
 """
-import time
+from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
 
 HANDLERS = {}
 
@@ -47,7 +47,8 @@ def line_coding(ctx, step):
     v, p = ctx["device"].get("vid"), ctx["device"].get("pid")
     d = usb.core.find(idVendor=v, idProduct=p)
     assert d is not None, "USB 设备未找到"
-    lc = bytes([0x80, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x08])  # 115200-8N1
+    # 115200-8N1：dwDTERate 4 字节 LE（115200=0x1C200），旧值 [80 BB 00 00] 实为 48000（#77）
+    lc = bytes([0x00, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x08])
     d.ctrl_transfer(0x21, 0x20, 0, 0, lc)                    # SET_LINE_CODING
     r = d.ctrl_transfer(0xA1, 0x21, 0, 0, 7)                 # GET_LINE_CODING
     ok = bytes(r) == lc
@@ -62,5 +63,5 @@ def dfu_verify(ctx, step):
     img = step.get("image", "")
     r = subprocess.run(["dfu-util", "-a", str(step.get("alt", 0)), "-D", img],
                        capture_output=True, text=True, timeout=120)
-    ok = r.returncode == 0 and "done" in r.stderr.lower() or r.returncode == 0
+    ok = r.returncode == 0   # 旧表达式因优先级恒等价 rc==0（"done" 为死码）；保守不收紧语义
     return StepResult(step.get("name", "DFU 校验"), ok, {"rc": r.returncode}, r.stderr[-120:])

@@ -3,6 +3,8 @@
 """
 import time
 
+from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+
 HANDLERS = {}
 
 
@@ -15,6 +17,19 @@ def handler(t):
 
 def _name_match(dev):
     return dev.get("name_prefix", "")
+
+
+_SIG_BASE = "0000{:04x}-0000-1000-8000-00805f9b34fb"   # 16 位 assigned number 的 SIG 全形
+
+
+def _svc_is_uuid16(svc, want):
+    """SIG 16 位服务精确匹配：全形整串比较（BT Core §2.5.1——16 位别名先扩展回 128 位）。
+
+    旧版 startswith(f"{want:04x}") 对全形恒不中（全形以 0000 前缀开头，#77）；
+    首轮修复取首组转 int 比较，被复核以首组撞车反例驳倒（00001812-0000-9999-…
+    非 SIG 基址也命中，#77 复核 H2）——整串比较天然排除厂商 128 位与撞车形。
+    """
+    return svc.uuid.lower() == _SIG_BASE.format(want)
 
 
 @handler("ble_scan_connect")
@@ -58,7 +73,7 @@ def gatt(ctx, step):
             return False, {}
         async with BleakClient(t) as c:
             svcs = c.services
-            found = any(s.uuid.startswith(f"{want:04x}") for s in svcs)
+            found = any(_svc_is_uuid16(s, want) for s in svcs)
             return found, {"services": len(svcs)}
 
     ok, extra = asyncio.run(run())
@@ -87,7 +102,9 @@ def notify(ctx, step):
                 ev.set()
 
         async with BleakClient(t) as c:
-            hid_svc = next(s for s in c.services if s.uuid.startswith("1812"))
+            hid_svc = next((s for s in c.services if _svc_is_uuid16(s, 0x1812)), None)
+            if hid_svc is None:
+                return None                  # 无 HOGP 服务：干净失败而非协程内 StopIteration（#77 复核 H3）
             report_char = next(ch for ch in hid_svc.characteristics
                                if "notify" in ch.properties)
             await c.start_notify(report_char, cb)
@@ -99,4 +116,6 @@ def notify(ctx, step):
         return got
 
     got = asyncio.run(run())
+    if got is None:
+        return StepResult(step.get("name", "HID 通知"), False, {}, "未发现 HOGP 服务 0x1812")
     return StepResult(step.get("name", "HID 通知"), got >= want_n, {"notifications": got})

@@ -1,6 +1,8 @@
 """扩展坞产测后端：拓扑核对（hub 层级/billboard/每口枚举）——经 OS USB 树。"""
 import subprocess
 
+from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+
 HANDLERS = {}
 
 

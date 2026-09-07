@@ -69,7 +69,8 @@ def run_plan(plan: dict, dut_sn: str, station: str, mock: bool) -> TestReport:
     mod = importlib.import_module(f"usbtest.{backend}_test")
     handlers = getattr(mod, "HANDLERS", {})
     ctx = {"device": plan["device"], "station": station, "dut_sn": dut_sn,
-           "dev": None if mock else mod.open_device(plan["device"])}
+           # ble/dock 无 open_device（无设备句柄概念）——缺省 None 而非派发前 AttributeError（#77 复核 H1）
+           "dev": None if mock else getattr(mod, "open_device", lambda d: None)(plan["device"])}
     rep = TestReport(plan, dut_sn, station)
     for step in plan["steps"]:
         stype = step["type"]

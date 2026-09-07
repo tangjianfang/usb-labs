@@ -3,6 +3,8 @@
 """
 import time
 
+from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+
 HANDLERS = {}
 
 
@@ -17,7 +19,9 @@ def open_device(dev):
     import hid  # hidapi
     infos = hid.enumerate(dev.get("vid"), dev.get("pid"))
     assert infos, "未发现 HID 设备（检查 VID/PID 或权限）"
-    return hid.device()
+    d = hid.device()
+    d.open_path(infos[0]["path"])   # 旧版返回未打开实例（_h 靠 is_opened 自愈掩盖，#77）
+    return d
 
 
 def _h(ctx):
