@@ -140,12 +140,15 @@ class MscDevice(UsbDevice):
 
     def __init__(self, device_desc, config_desc, blocks: int = 64, strings=None):
         super().__init__(device_desc, config_desc, strings)
+        if blocks < 1:
+            raise ValueError("MSC 盘块数须 ≥ 1（blocks=0 时容量探测会以负数下溢崩溃）")
         self.endpoints = {(1, "OUT"): Endpoint(1, "OUT", 64, "bulk"),
                           (1, "IN"): Endpoint(1, "IN", 64, "bulk")}
         self.ep_out = self.endpoints[(1, "OUT")]
         self.ep_in = self.endpoints[(1, "IN")]
         self.blocks = blocks
-        self.disk = {lba: bytearray(512) for lba in range(blocks)}
+        # 稀疏 RAM 盘（evolve #78）：>2TB 盘（4G+ LBA）无法全量预分配；未写块读零
+        self.disk: dict[int, bytearray] = {}
         self.bot_tag = 0
         self._bot = "CBW"
         self._cbd = None
@@ -160,7 +163,7 @@ class MscDevice(UsbDevice):
             dlen = int.from_bytes(data[8:12], "little")
             self._cbd = data[15:31]
             data_ret, status = self._scsi(self._cbd)
-            if self._cbd[0] == 0x2A and dlen:
+            if self._cbd[0] in (0x2A, 0x8A) and dlen:     # WRITE(10)/(16) 数据相
                 self._bot = "DATA_OUT"
                 self._rx, self._expect = bytearray(data[31:]), dlen   # BOT 允许 CBW 与数据首段同包
                 return
@@ -171,7 +174,8 @@ class MscDevice(UsbDevice):
         elif self._bot == "DATA_OUT":
             self._rx += data
             if len(self._rx) >= self._expect:
-                lba = int.from_bytes(self._cbd[2:6], "big")
+                wide = self._cbd[0] == 0x8A               # WRITE(16)：LBA BE64 [2..9]
+                lba = int.from_bytes(self._cbd[2:10] if wide else self._cbd[2:6], "big")
                 for i in range(self._expect // 512):
                     self.disk[lba + i] = bytearray(self._rx[i * 512:(i + 1) * 512])
                 self._in_queue.append(self._csw_bytes(0))
@@ -192,10 +196,21 @@ class MscDevice(UsbDevice):
         if op == 0x12:
             return self.INQUIRY[:36], 0
         if op == 0x25:
-            return (self.blocks - 1).to_bytes(4, "big") + (512).to_bytes(4, "big"), 0
-        if op in (0x28, 0x2A):
-            lba = int.from_bytes(cbd[2:6], "big")
-            n = int.from_bytes(cbd[7:9], "big")
+            # READ_CAPACITY(10)：容量越 32 位回 0xFFFFFFFF 哨兵（SBC-3），块长仍真值
+            last = min(self.blocks - 1, 0xFFFFFFFF)
+            return last.to_bytes(4, "big") + (512).to_bytes(4, "big"), 0
+        if op == 0x9E and cbd[1] == 0x10:
+            # READ_CAPACITY(16)：service action 0x10；last LBA BE64[0..7]+块长 BE32[8..11]，
+            # 按分配长度（BE32 [10..13]）截断——与上位机 msc_capacity_probe/验收表 D11 同口径
+            alloc = int.from_bytes(cbd[10:14], "big")
+            resp = ((self.blocks - 1).to_bytes(8, "big") + (512).to_bytes(4, "big") + b"\0" * 20)
+            return resp[:alloc], 0
+        if op in (0x28, 0x2A, 0x88, 0x8A):
+            # READ/WRITE(10)：LBA[2..5] 块数[7..8]；(16)：LBA BE64[2..9] 传输长度 BE32[10..13]
+            # （16 字节族按 4 字节域解析——上位机 16 位装法 [12..13] 值域 ≤0xFFFF 时等价）
+            wide = op in (0x88, 0x8A)
+            lba = int.from_bytes(cbd[2:10] if wide else cbd[2:6], "big")
+            n = int.from_bytes(cbd[10:14] if wide else cbd[7:9], "big")
             data = b"".join(bytes(self.disk.get(lba + i, b"\0" * 512)) for i in range(n))
             return data, 0
         return b"", 0x01

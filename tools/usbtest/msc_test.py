@@ -96,7 +96,7 @@ def msc_capacity_probe(scsi):
         assert status == 0 and blk > 0, "READ_CAPACITY(10) 失败或块长 0"
         return last + 1, blk
     status, rx = scsi(bytes([0x9E, 0x10]) + b"\0" * 11 + bytes([32, 0, 0]), "IN", b"\0" * 32)
-    assert status == 0, "READ_CAPACITY(16)（>2TB）失败"
+    assert status == 0 and len(rx) >= 12, "READ_CAPACITY(16)（>2TB）失败或短读"
     last = struct.unpack(">Q", rx[:8])[0]
     blk = struct.unpack(">I", rx[8:12])[0]
     assert blk > 0, "READ_CAPACITY(16) 返回块长 0"

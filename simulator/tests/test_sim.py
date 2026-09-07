@@ -118,6 +118,52 @@ def test_msc_bot():
     print("  ✓ MSC BOT 写读校验")
 
 
+def test_msc_2tb():
+    """>2TB 盘：RC10 哨兵→RC16 真值 + WRITE16/READ16 高 LBA 回环（evolve #78）。"""
+    bus = B.Bus()
+    host = H.Host(bus)
+    dev_desc = (bytes([0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40])
+                + (0xCAFE).to_bytes(2, "little") + (0x4002).to_bytes(2, "little")
+                + (0x0100).to_bytes(2, "little") + bytes([1, 2, 0, 1]))
+    cfg_desc = (bytes([0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0x80, 0xFA])
+                + bytes([0x09, 0x04, 0x00, 0x00, 0x02, 0x08, 0x06, 0x50, 0x00]))
+    blocks = 7814037168                      # 4TB@512B：LBA 越 32 位，稀疏盘才可实例化
+    msc = D.MscDevice(dev_desc, cfg_desc, blocks=blocks)
+    addr = host.enumerate(msc, target_addr=4)
+
+    def cbw(tag, dlen, data_in, cbd):
+        return (b"USBC" + tag.to_bytes(4, "little") + dlen.to_bytes(4, "little")
+                + bytes([0x80 if data_in else 0x00, 0x00, len(cbd)]) + cbd.ljust(16, b"\x00"))
+
+    # RC10 → 0xFFFFFFFF 哨兵（SBC-3：容量越 32 位回哨兵而非回绕；块长仍为真值）
+    host.bulk_write(addr, 1, cbw(1, 8, True, bytes([0x25]) + b"\0" * 9))
+    assert host.bulk_read(addr, 1, 8) == b"\xFF" * 4 + (512).to_bytes(4, "big"), "RC10 应回哨兵"
+    host.bulk_read(addr, 1, 13)              # CSW
+
+    # RC16（验收表 D11 手工 CDB 逐字节）→ last LBA BE64 [0..7] + 块长 BE32 [8..11]
+    host.bulk_write(addr, 1, cbw(2, 32, True,
+                                 bytes.fromhex("9E 10 00 00 00 00 00 00 00 00 00 00 00 20 00 00")))
+    rx = host.bulk_read(addr, 1, 32)
+    assert rx[:8] == (blocks - 1).to_bytes(8, "big") and rx[8:12] == (512).to_bytes(4, "big")
+    host.bulk_read(addr, 1, 13)
+
+    # WRITE16 高 LBA 写入：LBA BE64 [2..9]、传输长度 BE32 [10..13]
+    payload = b"USB-Labs SIM 2TB+" + b"\xCD" * (512 - 17)
+    cdb_w = bytes([0x8A, 0x00]) + (2 ** 32).to_bytes(8, "big") + (1).to_bytes(4, "big") + b"\x00\x00"
+    host.bulk_write(addr, 1, cbw(3, 512, False, cdb_w) + payload)
+    csw = host.bulk_read(addr, 1, 13)
+    assert csw[:4] == b"USBS" and csw[12] == 0 and csw[4:8] == (3).to_bytes(4, "little")
+    assert msc.disk[2 ** 32][:17] == payload[:17], "高 LBA 写入应落稀疏盘对应块"
+
+    # READ16 读回（D11 手工 CDB 逐字节：LBA=2^32、1 块）
+    host.bulk_write(addr, 1, cbw(4, 512, True,
+                                 bytes.fromhex("88 00 00 00 00 01 00 00 00 00 00 00 00 01 00 00")))
+    rx = host.bulk_read(addr, 1, 512 + 13)
+    assert rx[:17] == payload[:17], "READ16 高 LBA 读回不一致"
+    assert rx[512:525] == b"USBS" + (4).to_bytes(4, "little") + b"\x00" * 5
+    print("  ✓ MSC >2TB：RC10 哨兵/RC16/W16·R16 高 LBA 回环")
+
+
 def test_pd():
     src = PD.Source()
     snk = PD.Sink(want_v=9, want_i=2000)
@@ -150,6 +196,7 @@ if __name__ == "__main__":
     test_crc()
     test_enumeration_and_hid()
     test_msc_bot()
+    test_msc_2tb()
     test_pd()
     test_ble()
     print("\nusbsim 全部自测通过 ✓")

@@ -11,7 +11,9 @@ import struct
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))    # tools/（import usbtest）
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))), "simulator"))                                    # 仓库根/simulator（usbsim）
 
 from usbtest import msc_test
 from usbtest.msc_test import msc_capacity_probe, msc_rw_cdb
@@ -22,10 +24,12 @@ RC16_CDB_D11 = bytes.fromhex("9E 10 00 00 00 00 00 00 00 00 00 00 00 20 00 00")
 class FakeMsc:
     """内核假件：按 CDB[0] 应答（0x25=RC10 / 0x9E=RC16），记录全部 CDB。"""
 
-    def __init__(self, rc10_last, rc10_blk=512, rc16_last=None, rc16_blk=512, rc10_status=0):
+    def __init__(self, rc10_last, rc10_blk=512, rc16_last=None, rc16_blk=512,
+                 rc10_status=0, rc16_resp_len=32):
         self.rc10_last, self.rc10_blk = rc10_last, rc10_blk
         self.rc16_last, self.rc16_blk = rc16_last, rc16_blk
         self.rc10_status = rc10_status
+        self.rc16_resp_len = rc16_resp_len     # 短读旋钮：模拟设备短应答
         self.seen = []
 
     def __call__(self, cdb, data_dir, data):
@@ -36,7 +40,8 @@ class FakeMsc:
         if cdb[0] == 0x9E:
             assert self.rc16_last is not None, "未配 RC16 应答却收到 RC16"
             assert data_dir == "IN" and len(data) == 32
-            return 0, struct.pack(">QI", self.rc16_last, self.rc16_blk) + b"\0" * 20
+            resp = struct.pack(">QI", self.rc16_last, self.rc16_blk) + b"\0" * 20
+            return 0, resp[:self.rc16_resp_len]
         raise AssertionError(f"意外 CDB {bytes(cdb).hex()}")
 
 
@@ -153,6 +158,12 @@ class TestCapacityKernel(unittest.TestCase):
         with self.assertRaises(AssertionError):
             msc_capacity_probe(FakeMsc(rc10_last=8, rc10_status=1))
 
+    def test_rc16_short_read_rejected(self):
+        # 设备短应答（<12B 装不下 last LBA+块长）：干净拒绝而非 struct.error（#78 复核硬化）
+        f = FakeMsc(rc10_last=0xFFFFFFFF, rc16_last=7, rc16_resp_len=4)
+        with self.assertRaises(AssertionError):
+            msc_capacity_probe(f)
+
     def test_rc10_block_zero_rejected(self):
         with self.assertRaises(AssertionError):
             msc_capacity_probe(FakeMsc(rc10_last=8, rc10_blk=0))
@@ -252,6 +263,151 @@ class TestHandlers(unittest.TestCase):
         dev = FakeBotDev(0x10000000)
         with self.assertRaises(AssertionError):
             msc_test.HANDLERS["msc_write_verify"](self._ctx(dev), {"lba": 0, "blocks": 0})
+
+
+class UsbSimBotDev:
+    """usbsim MscDevice 的 BOT 适配器（evolve #78 端到端）。
+
+    内核级（FakeMsc）与处理器级（FakeBotDev）均为手写假件；本适配器把
+    simulator/usbsim 的真实 SCSI 功能模型接成 usbtest 处理器所需的
+    _bulk_eps/write/read 形状——处理器 → _cbw → BOT 状态机 → 设备模型 → CSW
+    全链在无真机下贯通（>2TB 哨兵/RC16/READ16·WRITE16 为仿真器新增能力）。
+    """
+    VID, PID = 0xCAFE, 0x4002
+
+    def __init__(self, blocks):
+        from usbsim import bus as B, device as D, host as H   # 局部导入：仅本类依赖仿真器
+        dev_desc = (bytes([0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40])
+                    + self.VID.to_bytes(2, "little") + self.PID.to_bytes(2, "little")
+                    + (0x0100).to_bytes(2, "little") + bytes([1, 2, 0, 1]))
+        cfg_desc = (bytes([0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0x80, 0xFA])
+                    + bytes([0x09, 0x04, 0x00, 0x00, 0x02, 0x08, 0x06, 0x50, 0x00]))
+        self.msc = D.MscDevice(dev_desc, cfg_desc, blocks=blocks)
+        self.host = H.Host(B.Bus())
+        self.addr = self.host.enumerate(self.msc, target_addr=3)
+
+    def __iter__(self):
+        return iter([[_EPS]])               # EP1 OUT / EP1 IN 批量（与仿真器端点号一致）
+
+    def write(self, ep, data, timeout=0):
+        self.host.bulk_write(self.addr, ep & 0x0F, bytes(data))
+
+    def read(self, ep, length, timeout=0):
+        rx = self.host.bulk_read(self.addr, ep & 0x0F, length)
+        assert len(rx) == length, f"仿真器帧长 {len(rx)} != 请求 {length}"
+        return rx
+
+
+class TestUsbSimEndToEnd(unittest.TestCase):
+    """端到端：usbtest 参考实现 × usbsim 设备模型（>2TB 哨兵/RC16/READ16·WRITE16）。"""
+
+    @staticmethod
+    def _ctx(dev):
+        return {"dev": dev, "device": {"vid": 0, "pid": 0}}
+
+    def test_e2e_capacity_plain_disk_rc10_direct(self):
+        dev = UsbSimBotDev(0x10000000)              # 128GiB@512B：RC10 直答真值
+        r = msc_test.HANDLERS["msc_capacity"](self._ctx(dev), {"limits": {"min_gb": 100}})
+        self.assertTrue(r.passed)
+        self.assertEqual(r.measured["gb"], 137.44)
+
+    def test_e2e_capacity_4tb_sentinel_rc16_true_value(self):
+        dev = UsbSimBotDev(7814037168)              # 4TB：RC10 哨兵→RC16 真值（端到端）
+        r = msc_test.HANDLERS["msc_capacity"](self._ctx(dev), {"limits": {"min_gb": 3000}})
+        self.assertTrue(r.passed)
+        self.assertEqual(r.measured["gb"], round(7814037168 * 512 / 1e9, 2))
+
+    def test_e2e_capacity_probe_against_sim_model(self):
+        # 内核直驱（不经处理器）：对仿真器模型哨兵→RC16 升级路径
+        dev = UsbSimBotDev(2 ** 33 + 64)
+        total, blk = msc_capacity_probe(
+            lambda cbd, d, data: msc_test._scsi(self._ctx(dev), cbd, d, data))
+        self.assertEqual((total, blk), (2 ** 33 + 64, 512))
+
+    def test_e2e_write_verify_high_lba_read16_roundtrip(self):
+        # WRITE16 写入高 LBA → READ16 回读，随机图案经仿真器稀疏 RAM 盘往返
+        dev = UsbSimBotDev(2 ** 33 + 64)
+        r = msc_test.HANDLERS["msc_write_verify"](self._ctx(dev),
+                                                  {"lba": 2 ** 32, "blocks": 8, "block_size": 512})
+        self.assertTrue(r.passed)
+        self.assertEqual(r.measured["bytes"], 8 * 512)
+        self.assertEqual(sorted(dev.msc.disk), list(range(2 ** 32, 2 ** 32 + 8)))
+
+    def test_e2e_write_verify_small_disk_read16(self):
+        # 小盘（≤2TB）也接受 16 字节族：LBA=0 经 WRITE16 写入、READ16 读回
+        # （主机选路按最高寻址 LBA 走 10 字节——本例直接钉设备侧 16 字节族可用性）
+        dev = UsbSimBotDev(64)
+        cbd_w = bytes([0x8A, 0]) + (0).to_bytes(8, "big") + (1).to_bytes(4, "big") + b"\0\0"
+        cbd_r = bytes([0x88, 0]) + (0).to_bytes(8, "big") + (1).to_bytes(4, "big") + b"\0\0"
+        st_w, _ = msc_test._scsi(self._ctx(dev), cbd_w, "OUT", b"\x5A" * 512)
+        st_r, rx = msc_test._scsi(self._ctx(dev), cbd_r, "IN", b"\0" * 512)
+        self.assertEqual((st_w, st_r), (0, 0))
+        self.assertEqual(rx, b"\x5A" * 512)
+
+    def test_e2e_rc16_small_disk_reports_true_capacity(self):
+        # RC16 不限于 >2TB：小盘直问 RC16 亦应回真值（last=63 BE64）
+        dev = UsbSimBotDev(64)
+        st, rx = msc_test._scsi(self._ctx(dev), bytes([0x9E, 0x10]) + b"\0" * 11
+                                + bytes([32, 0, 0]), "IN", b"\0" * 32)
+        self.assertEqual(st, 0)
+        self.assertEqual(rx[:12], struct.pack(">QI", 63, 512))
+
+    def test_e2e_capacity_exact_block_count(self):
+        # 内核精确块数（复核 M1d）：gb 断言粒度 0.01GB≈19531 块看不见 ±1 块错
+        dev = UsbSimBotDev(0x10000000)
+        self.assertEqual(msc_capacity_probe(
+            lambda cbd, d, data: msc_test._scsi(self._ctx(dev), cbd, d, data)),
+            (0x10000000, 512))
+
+    def test_e2e_boundary_exactly_2tb_uses_rc16(self):
+        # 恰 2TB（last=0xFFFFFFFF=哨兵值）：RC10 真值与哨兵同值→升 RC16 同值，无歧义
+        dev = UsbSimBotDev(0x100000000)
+        self.assertEqual(msc_capacity_probe(
+            lambda cbd, d, data: msc_test._scsi(self._ctx(dev), cbd, d, data)),
+            (0x100000000, 512))
+
+    def test_e2e_rc16_alloc_length_truncates(self):
+        # 分配长度截断（复核 M3/M3b）：alloc=8 只回 last LBA；alloc=0 零长；alloc>32 封顶 32。
+        # 直驱设备模型断言——BOT 层 bulk_read 按 out[:size] 截尾，超长帧与真短帧不可区分
+        dev = UsbSimBotDev(64)
+
+        def rc16(alloc):
+            return dev.msc._scsi(bytes([0x9E, 0x10]) + b"\0" * 8
+                                 + alloc.to_bytes(4, "big") + b"\0\0")
+
+        self.assertEqual(rc16(8), ((63).to_bytes(8, "big"), 0))
+        self.assertEqual(rc16(0), (b"", 0))
+        data64, st64 = rc16(64)
+        self.assertEqual((st64, len(data64)), (0, 32))
+
+    def test_e2e_rc16_wrong_service_action_rejected(self):
+        # SA≠0x10 不是 READ_CAPACITY(16)（复核 M9）：落未知操作码 → CHECK CONDITION(1)。
+        # 期望读零长（CHECK CONDITION 无数据相，传输层只回 CSW）
+        dev = UsbSimBotDev(64)
+        st, _ = msc_test._scsi(self._ctx(dev), bytes([0x9E, 0x00]) + b"\0" * 8
+                               + (32).to_bytes(4, "big") + b"\0\0", "IN", b"")
+        self.assertEqual(st, 1)
+
+    def test_e2e_read16_transfer_length_be32_high_half(self):
+        # 传输长度按 BE32 [10..13] 解析（复核 M5 高半无钉）：0x10000 块=32MiB。
+        # 直驱设备模型（绕 BOT/包层——32MiB 经纯 Python 包级 CRC 过慢）；
+        # 上位机 16 位装法发不出非零高半，D11 手工 CDB 形态是唯一来源，此处钉住
+        dev = UsbSimBotDev(0x20000)
+        cbd = bytes([0x88, 0]) + (0).to_bytes(8, "big") + (0x10000).to_bytes(4, "big") + b"\0\0"
+        data, st = dev.msc._scsi(cbd)
+        self.assertEqual((st, len(data)), (0, 0x10000 * 512))
+
+    def test_e2e_unwritten_block_reads_zero(self):
+        # 稀疏盘未写块读零（复核 M8）：盘尾未写 LBA 回 512 字节零 + PASS
+        dev = UsbSimBotDev(64)
+        cbd = bytes([0x88, 0]) + (63).to_bytes(8, "big") + (1).to_bytes(4, "big") + b"\0\0"
+        st, rx = msc_test._scsi(self._ctx(dev), cbd, "IN", b"\0" * 512)
+        self.assertEqual((st, rx), (0, b"\0" * 512))
+
+    def test_e2e_zero_blocks_rejected_at_construction(self):
+        # blocks=0 构造即拒（复核边界：旧行为探测时负数下溢 OverflowError）
+        with self.assertRaises(ValueError):
+            UsbSimBotDev(0)
 
 
 if __name__ == "__main__":

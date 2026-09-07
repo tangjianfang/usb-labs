@@ -18,7 +18,7 @@
 simulator/usbsim/
 ├── packets.py   包编解码: PID/CRC5/CRC16/Token/Data/Handshake + 解析
 ├── bus.py       虚拟总线: 帧计数、事务路由、捕获日志、错误注入
-├── device.py    设备模型: EP0 状态机、描述符服务、Hub/HID/MSC 功能
+├── device.py    设备模型: EP0 状态机、描述符服务、Hub/HID/MSC 功能（含 >2TB RC16/READ16）
 ├── host.py      主机模型: 标准枚举序列、control/bulk/interrupt API
 ├── pd.py        PD 消息层: Source/Sink 策略引擎、PDO/RDO、协商时序
 ├── ble.py       BLE: 广播/连接/GATT 属性表/订阅通知
@@ -45,11 +45,12 @@ python simulator/tests/test_sim.py
 
 `tools/usbtest/` 的 mock 后端可以被本仿真器替代升级：
 `usbtest` 步骤 → 驱动 usbsim 的虚拟设备 → 虚拟总线交换包 → 断言真实协议行为。
-当前 usbtest 的 mock 是确定性占位；接入 usbsim 后即可在 CI 中演练**完整协议交互**。
+MSC 后端已按此接通（evolve #78：`tools/usbtest/tests/test_msc.py` 端到端驱动
+MscDevice——处理器→CBW→BOT→SCSI 模型→CSW 全链）；其余后端 mock 仍为确定性占位。
 
 ## 已仿真的协议行为（自测覆盖）
 
-- USB 2.0: 枚举全序列（描述符/地址/配置）、EP0 三阶段、批量 BOT+SCSI（INQUIRY/容量/写读）、中断轮询+NAK、数据触发、错误注入重传
+- USB 2.0: 枚举全序列（描述符/地址/配置）、EP0 三阶段、批量 BOT+SCSI（INQUIRY/容量/写读、>2TB 稀疏盘：RC10 哨兵→RC16、READ/WRITE(16) 高 LBA）、中断轮询+NAK、数据触发、错误注入重传
 - PD: Source_Capabilities 广播、RDO 构造与 PDO 选择（毫伏统一口径）、Accept/PS_RDY
 - BLE: 广播载荷（AD 结构）、连接、GATT 发现/读/订阅
 
