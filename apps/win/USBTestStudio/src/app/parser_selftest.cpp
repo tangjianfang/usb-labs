@@ -240,6 +240,50 @@ int main() {
               "游标: 选型 none 时解析开关回退原始视图");
     }
 
+    // —— S6 PD 遥测解析（契约版本 1，与 labs/lab5 telemetry_contract.h 对齐） ——
+    {
+        using namespace pd_telemetry;
+        Sample s;
+        std::string tail;
+        // 一帧拆两半到达（帧边界无关：残行跨帧续传）
+        const std::string full = "cc_state=Attached.SNK\r\ncontract_v=9.00\r\n";
+        const std::string half = full.substr(0, full.size() / 2);
+        const std::string rest1 = full.substr(half.size());
+        feed(s, std::vector<uint8_t>(half.begin(), half.end()), tail);
+        feed(s, std::vector<uint8_t>(rest1.begin(), rest1.end()), tail);
+        check(tail.empty(), "遥测: 两半帧拼接解码无残行");
+        check(s.has_cc && s.cc_state == L"Attached.SNK", "遥测: cc_state 采集");
+        check(s.has_contract && s.contract_v == 9.0, "遥测: contract_v=9.00");
+
+        const std::string rest = "contract_i=2.25\nvbus_v=9.02\n";
+        feed(s, std::vector<uint8_t>(rest.begin(), rest.end()), tail);
+        check(s.contract_i == 2.25 && s.vbus_v == 9.02, "遥测: contract_i/vbus_v 采集");
+        const std::wstring line = render(s);
+        check(line.find(L"CC=Attached.SNK") != std::wstring::npos &&
+                  line.find(L"9.00V") != std::wstring::npos &&
+                  line.find(L"2.25A") != std::wstring::npos &&
+                  line.find(L"VBUS 9.02V") != std::wstring::npos,
+              "遥测: 渲染行含 CC/合同/VBUS 三段");
+        // CC 迁移与坏行/未知键宽容
+        const std::string mig = "cc_state=Unattached.SNK\npower_type=usb\nbadline\n";
+        feed(s, std::vector<uint8_t>(mig.begin(), mig.end()), tail);
+        check(s.cc_state == L"Unattached.SNK", "遥测: CC 状态迁移");
+        // 嗅探与 auto 升级
+        check(sniff(std::vector<uint8_t>(full.begin(), full.end())), "遥测: sniff 命中键");
+        const std::string plain = "hello";
+        check(!sniff(std::vector<uint8_t>(plain.begin(), plain.end())), "遥测: sniff 普通文本不命中");
+        const parser_select::PaneParser ascii{parser_select::PaneParser::Kind::ascii, false};
+        const auto up = parser_select::upgrade_if_telemetry(
+            ascii, std::vector<uint8_t>(full.begin(), full.end()));
+        check(up.kind == parser_select::PaneParser::Kind::pd_telemetry,
+              "遥测: auto 升级 ascii→pd_telemetry");
+        const std::string hi = "hi";
+        const auto keep = parser_select::upgrade_if_telemetry(
+            ascii, std::vector<uint8_t>(hi.begin(), hi.end()));
+        check(keep.kind == parser_select::PaneParser::Kind::ascii,
+              "遥测: 普通文本保持 ascii 不升级");
+    }
+
     printf("parser_selftest: %d 例全绿\n", g_pass);
     return 0;
 }

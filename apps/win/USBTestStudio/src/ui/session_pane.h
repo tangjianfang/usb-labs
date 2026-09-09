@@ -19,6 +19,7 @@
 
 #include "channel/channel.h"
 #include "parser/parser_select.h"
+#include "parser/pd_telemetry_parser.h"
 #include "session/session_core.h"
 #include "session/session_view.h"
 
@@ -106,6 +107,9 @@ private:
     std::unique_ptr<IChannel> m_channel;
     session_core::SessionCore m_core;
     session_view::RenderCursor m_view;
+    // S6 PD 遥测：串口流识别后维护样本状态与残行（pd_telemetry::feed 续传用）
+    pd_telemetry::Sample m_pd;
+    std::string m_pd_tail;
     std::wstring m_note;           // 面板状态行的最近一次结果/错误
 
     // 历史回选的草稿镜像（TxHistory 游标在 core，草稿文本在 UI 侧）

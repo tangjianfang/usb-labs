@@ -412,6 +412,21 @@ void SessionPane::recall(bool up) {
 void SessionPane::on_rx(std::vector<uint8_t>* payload) {
     if (!payload) return;
     m_core.record_rx(payload->data(), payload->size(), now_ms());
+    // S6 PD 遥测：串口 ASCII 选型下嗅探到遥测键 → 升级选型并按新口径重渲染
+    if (m_view.parser.kind == parser_select::PaneParser::Kind::ascii) {
+        const auto up = parser_select::upgrade_if_telemetry(m_view.parser, *payload);
+        if (up.kind == parser_select::PaneParser::Kind::pd_telemetry) {
+            m_view.parser = up;
+            render_rebuild();
+        }
+    }
+    if (m_view.parser.kind == parser_select::PaneParser::Kind::pd_telemetry) {
+        const auto fr = pd_telemetry::feed(m_pd, *payload, m_pd_tail);
+        render_poll();
+        if (fr.updated) append_lines({pd_telemetry::render(m_pd)});   // 状态行随字段更新刷新
+        status_refresh();
+        return;
+    }
     render_poll();
     status_refresh();
 }

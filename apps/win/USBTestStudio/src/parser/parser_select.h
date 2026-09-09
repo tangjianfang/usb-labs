@@ -11,6 +11,7 @@
 
 #include "channel/channel.h"
 #include "parser/hid_parser.h"
+#include "parser/pd_telemetry_parser.h"
 #include "session/session_codec.h"
 #include "app/log.h"
 
@@ -19,7 +20,7 @@
 namespace parser_select {
 
 struct PaneParser {
-    enum class Kind { none, ascii, hid_keyboard, hid_mouse, hid_consumer };
+    enum class Kind { none, ascii, hid_keyboard, hid_mouse, hid_consumer, pd_telemetry };
     Kind kind = Kind::none;
     bool has_report_id = false;   // HidCapsInfo：输入报告含 Report ID 前缀字节（透传剥离）
 
@@ -29,6 +30,7 @@ struct PaneParser {
             case Kind::hid_mouse:    return L"鼠标";
             case Kind::hid_consumer: return L"消费页";
             case Kind::ascii:        return L"ASCII";
+            case Kind::pd_telemetry: return L"PD 遥测";
             case Kind::none:         return L"无";
         }
         return L"无";
@@ -80,10 +82,27 @@ inline std::wstring parse_frame(const ChannelFrame& f, const PaneParser& p) {
                                                 p.has_report_id);
         case PaneParser::Kind::ascii:
             return session_codec::to_ascii_view(f.bytes);
+        case PaneParser::Kind::pd_telemetry: {
+            // S6：key=value 行流 → 状态行渲染（残行缓冲挂在解析器外由面板持有；
+            // 此处无状态渲染当前累计值，面板用 pd_telemetry::feed 维护 Sample）
+            return {};
+        }
         case PaneParser::Kind::none:
             return {};
     }
     return {};
+}
+
+// 串口会话 auto 升级：ASCII 选型 + 帧流嗅探到遥测键 → 切 PD 遥测（S6）。
+// 返回升级后的选型（未命中原样返回，info 留痕切换沿）。
+inline PaneParser upgrade_if_telemetry(const PaneParser& p, const std::vector<uint8_t>& bytes) {
+    if (p.kind != PaneParser::Kind::ascii) return p;
+    if (!pd_telemetry::sniff(bytes)) return p;
+    PaneParser up = p;
+    up.kind = PaneParser::Kind::pd_telemetry;
+    ustlog::logger("parser.pd")->info("嗅探到遥测键：解析器 {} → PD 遥测",
+                                      ustlog::w2u(p.name()));
+    return up;
 }
 
 }  // namespace parser_select
