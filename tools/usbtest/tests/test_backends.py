@@ -1,4 +1,7 @@
-"""cdc/hid/uvc/pd/ble/dock 六产测后端离线自测：派发冒烟（假件注入）+ StepResult 导入钉。
+"""cdc/hid/uvc/pd/ble/dock/uac 产测后端离线自测：派发冒烟（假件注入）+ StepResult 导入钉。
+T9/T10 增补: uac_record_level（sounddevice 可选依赖——无库环境优雅失败字符串而非裸
+ImportError；假件测电平口径与设备名 vid/pid 匹配）；dock Windows 路径（pnputil 假样本
+解析 hub/高速行、UsbTreeView 优先/pnputil 回退的平台分派、假 PATH 无工具干净 FAIL）。
 
 旧病（evolve #76 残余 Tier 1）：六后端用而未导入 StepResult——真实后端任一步骤
 派发即 NameError（core.run_plan 的 except 吞成 FAIL，整站必挂；CI mock 模式掩蔽）。
@@ -16,6 +19,7 @@ AttributeError→getattr 回退 None；UUID 匹配整串比较（首组撞车 00
 import contextlib
 import importlib
 import os
+import pathlib
 import sys
 import types
 import unittest
@@ -23,7 +27,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from usbtest import cdc_test, core, dock_test, hid_test, pd_test, uvc_test, ble_test
+from usbtest import cdc_test, core, dock_test, hid_test, pd_test, uvc_test, ble_test, uac_test, mock_test
 from usbtest.core import StepResult
 
 BASE = "0000{:04x}-0000-1000-8000-00805f9b34fb"   # 16 位 assigned number 的全形
@@ -198,15 +202,42 @@ class FakeAdvert:
         self.name = name
 
 
-def _ctx(dev=None, **device):
-    return {"dev": dev, "device": dict(device)}
+def _sounddevice_module(amplitude=0.5, devices=None):
+    """sounddevice 假件：rec 吐恒幅序列（RMS=amplitude，-6 dBFS@0.5），记录 frames/参数。"""
+    mod = types.ModuleType("sounddevice")
+    mod._rec = None
+    mod.query_devices = lambda: list(devices if devices is not None else [
+        {"name": "Microphone (USB Audio CODEC 1234:5678)", "max_input_channels": 2},
+        {"name": "麦克风阵列 (Realtek High Definition Audio)", "max_input_channels": 2},
+    ])
+    mod.default = types.SimpleNamespace(device=(0, 1))
+
+    def rec(frames, samplerate=48000, channels=1, dtype="float32", device=None):
+        mod._rec = (frames, samplerate, channels, device)
+        return [amplitude] * frames
+
+    mod.rec, mod.wait = rec, (lambda: None)
+    return mod
+
+
+def _ctx(dev=None, sysname=None, which=None, run=None, env=None, **device):
+    c = {"dev": dev, "device": dict(device)}
+    if sysname is not None:
+        c["sysname"] = sysname            # dock 平台分派注入缝（缺省走真实 platform.system()）
+    if which is not None:
+        c["which"] = which
+    if run is not None:
+        c["run"] = run
+    if env is not None:
+        c["env"] = env
+    return c
 
 
 # ---------------- StepResult 导入钉（六后端旧病） ----------------
 
 class TestStepResultImported(unittest.TestCase):
     def test_all_backends_import_stepresult(self):
-        for name in ("cdc_test", "hid_test", "uvc_test", "pd_test", "ble_test", "dock_test"):
+        for name in ("cdc_test", "hid_test", "uvc_test", "pd_test", "ble_test", "dock_test", "uac_test"):
             with self.subTest(backend=name):
                 mod = importlib.import_module(f"usbtest.{name}")
                 self.assertIs(mod.StepResult, StepResult)
@@ -334,6 +365,43 @@ class TestPd(unittest.TestCase):
         self.assertTrue(r.note.startswith("SCPI 异常"), r.note)
 
 
+# ---------------- uac ----------------
+
+class TestUac(unittest.TestCase):
+    def test_missing_sounddevice_fails_with_install_hint(self):
+        # T9 验收口径：无 sounddevice 环境断言优雅失败字符串而非裸 ImportError
+        with _module("sounddevice", None):
+            r = uac_test.HANDLERS["uac_record_level"](_ctx(vid=0x1234, pid=0x5678), {"duration": 0.1})
+        self.assertFalse(r.passed)
+        self.assertIn("sounddevice 未安装", r.note)
+        self.assertIn("pip install sounddevice", r.note)
+
+    def test_record_level_measures_dbfs_and_matches_device(self):
+        # 恒幅 0.5 假件 → RMS 0.5 → -6.0 dBFS；vid/pid 过滤按设备名 "1234:5678" 子串命中
+        sd = _sounddevice_module(amplitude=0.5)
+        with _module("sounddevice", sd):
+            r = uac_test.HANDLERS["uac_record_level"](
+                _ctx(vid=0x1234, pid=0x5678), {"duration": 0.1, "limits": {"min_db": -20}})
+        self.assertTrue(r.passed)
+        self.assertAlmostEqual(r.measured["level_dbfs"], -6.0, delta=0.1)
+        self.assertIn("1234:5678", r.measured["device"])
+        self.assertEqual(sd._rec[0], 4800)                     # frames = duration × 默认 48000Hz
+        self.assertEqual(sd._rec[2], 1)                        # 单声道
+
+    def test_silent_input_fails_below_min_db(self):
+        sd = _sounddevice_module(amplitude=0.0)                # 静音 → -120 dBFS 哨兵
+        with _module("sounddevice", sd):
+            r = uac_test.HANDLERS["uac_record_level"](_ctx(), {"duration": 0.1, "limits": {"min_db": -60}})
+        self.assertFalse(r.passed)
+        self.assertEqual(r.measured["level_dbfs"], -120.0)
+
+    def test_uac_registered_real_and_mock_unchanged(self):
+        # 注册表挂接（core 按 usbtest.<backend>_test 约定 importlib 派发）；mock 路径行为不变
+        self.assertIn("uac_record_level", uac_test.HANDLERS)
+        self.assertIs(uac_test.StepResult, StepResult)
+        self.assertIn("uac_record_level", mock_test.HANDLERS)   # mock 后端仍有同名处理器（--mock 回归口径）
+
+
 # ---------------- ble ----------------
 
 class TestBle(unittest.TestCase):
@@ -415,10 +483,12 @@ class TestRunPlan(unittest.TestCase):
 
 class TestDock(unittest.TestCase):
     def test_topology_counts_hs_ports(self):
+        # sysname="Linux" 钉既有 lsusb -t 路径（Windows 产线机分派会被 ctx 缝改道）
         out = types.SimpleNamespace(
             stdout="/: Bus 04.Port 1: 5000M\n/: Bus 05.Port 1: 5000M\nBus 01.Port 1: 480M\n")
         with mock.patch.object(dock_test.subprocess, "run", return_value=out):
-            r = dock_test.HANDLERS["dock_topology"](_ctx(), {"limits": {"min_hs_ports": 2}})
+            r = dock_test.HANDLERS["dock_topology"](_ctx(sysname="Linux"),
+                                                    {"limits": {"min_hs_ports": 2}})
         self.assertTrue(r.passed)
         self.assertEqual(r.measured["hs_ports"], 3)
 
@@ -427,9 +497,89 @@ class TestDock(unittest.TestCase):
         step = {"loops": 2, "expect_id": "1235:abcd", "limits": {"min_rate": 100}}
         with mock.patch.object(dock_test.subprocess, "run", return_value=out), \
              mock.patch("builtins.input", return_value=""):
-            r = dock_test.HANDLERS["hub_port_cycle"](_ctx(), step)
+            r = dock_test.HANDLERS["hub_port_cycle"](_ctx(sysname="Linux"), step)
         self.assertTrue(r.passed)
         self.assertEqual(r.measured["success_rate"], "100%")
+
+
+class TestDockWindows(unittest.TestCase):
+    """T10: dock 后端 Windows 路径——pnputil 假样本解析 + 平台分派（which/run/env 全注入）。"""
+
+    # 中文 Windows 实测版式（字段名本地化）+ 英文设备描述混排，hub 行 2 条、高速线索 1 条
+    PNPUTIL_SAMPLE = (
+        "Microsoft PnP 工具\n"
+        "\n"
+        "实例 ID:                USB\\VID_05E3&PID_0610\\5&2f3927&0&2\n"
+        "设备描述:         Generic SuperSpeed USB Hub\n"
+        "类名:                 USB\n"
+        "状态:                 已启动\n"
+        "\n"
+        "实例 ID:                USB\\VID_2341&PID_0043\\854353236303150\n"
+        "设备描述:         USB Serial Device (COM7)\n"
+        "类名:                 Ports\n"
+        "\n"
+        "实例 ID:                USB\\VID_1A40&PID_0101\\5&2f3927&0&1\n"
+        "设备描述:         通用 USB 集线器\n"
+        "状态:                 已启动\n"
+    )
+
+    @staticmethod
+    def _which_pnputil_only(name):
+        return r"C:\Windows\System32\pnputil.EXE" if name.lower() == "pnputil" else None
+
+    @staticmethod
+    def _run_empty(*a, **k):
+        return types.SimpleNamespace(stdout="", returncode=1)
+
+    def test_parse_pnputil_counts_hubs_and_hs(self):
+        # 假样本文本（模拟 pnputil 输出）解析出 hub/高速行：SuperSpeed Hub + 通用 USB 集线器
+        hs, hubs = dock_test._parse_pnputil(self.PNPUTIL_SAMPLE)
+        self.assertEqual((hs, hubs), (1, 2))
+
+    def test_decode_cli_gbk_output(self):
+        # 真机钉（zh-CN Windows）：pnputil 吐 GBK 字节，text=True 默认 UTF-8 解码炸掉
+        # → 必须按字节收 + utf-8/mbcs 双编码尝试；str 直通（假件注入口径）
+        self.assertEqual(dock_test._decode_cli(self.PNPUTIL_SAMPLE), self.PNPUTIL_SAMPLE)
+        self.assertIn("集线器", dock_test._decode_cli("通用 USB 集线器".encode("gbk")))
+
+    def test_windows_dispatch_usbtv_preferred(self):
+        # UsbTreeView 在 PATH → 优先走 /c /f 文本导出（CLI 形状钉死），报告落盘后按内容解析
+        report = ("Hub Information\n"
+                  "Device Bus Speed  : 0x03 (SuperSpeed)\n"
+                  "Device Bus Speed  : 0x02 (High-Speed)\n")
+
+        def fake_run(cmd, **k):
+            self.assertEqual(cmd[1:3], ["/c", "/f"])           # 参数以 UsbTreeView 文档为准的保守写法
+            pathlib.Path(cmd[3]).write_text(report, encoding="utf-8")
+            return types.SimpleNamespace(returncode=0)
+
+        hs, raw, source = dock_test._usb_tree(
+            sysname="Windows", which=lambda n: r"C:\tools\UsbTreeView.exe",
+            run=fake_run, env={})
+        self.assertEqual(source, "usbtv")
+        self.assertEqual(hs, 2)
+        self.assertIn("Hub Information", raw)
+
+    def test_windows_dispatch_pnputil_fallback(self):
+        # 假 PATH 无 UsbTreeView → 回退 pnputil /enum-devices，假输出进解析器
+        out = types.SimpleNamespace(stdout=self.PNPUTIL_SAMPLE, returncode=0)
+        hs, raw, source = dock_test._usb_tree(
+            sysname="Windows", which=self._which_pnputil_only,
+            run=lambda *a, **k: out, env={})
+        self.assertEqual(source, "pnputil")
+        self.assertEqual(hs, 1)
+
+    def test_windows_no_tools_fails_clean(self):
+        # 假 PATH 无任何工具（pnputil 也不在）→ 函数级 (0,"","none") 不抛异常；
+        # 处理器级干净 FAIL 留痕而非异常穿透
+        hs, raw, source = dock_test._usb_tree(
+            sysname="Windows", which=lambda n: None, run=self._run_empty, env={})
+        self.assertEqual(source, "none")
+        self.assertEqual((hs, raw), (0, ""))
+        c = _ctx(sysname="Windows", which=lambda n: None, run=self._run_empty, env={})
+        r = dock_test.HANDLERS["dock_topology"](c, {"limits": {"min_hs_ports": 1}})
+        self.assertFalse(r.passed)
+        self.assertIn("无可用", r.note)
 
 
 if __name__ == "__main__":

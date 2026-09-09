@@ -1,6 +1,6 @@
 # usbtest 状态矩阵（诚实清单）
 
-> 更新：2026-09-05（evolve 终局）；2026-09-07（evolve #77：六真实后端漏导入 StepResult 收口 + 复核硬化三处——run_plan 无 open_device 后端派发前崩溃/UUID 全形整串匹配/notify 无 HOGP 干净失败，离线自测 tests/test_backends.py 26 例 CI 常绿）。状态定义见文末。
+> 更新：2026-09-05（evolve 终局）；2026-09-07（evolve #77：六真实后端漏导入 StepResult 收口 + 复核硬化三处——run_plan 无 open_device 后端派发前崩溃/UUID 全形整串匹配/notify 无 HOGP 干净失败，离线自测 tests/test_backends.py 26 例 CI 常绿）；2026-09-10（T9/T10：uac_record_level 真实后端落地（T9）——sounddevice 可选依赖，无库优雅失败不裸抛 ImportError，Windows 开发机经 core.run_plan 全链打通至真实录音电平判定；dock 后端 Windows 路径（T10）——UsbTreeView.exe CLI 优先/pnputil /enum-devices 回退（zh-CN GBK 输出解码已钉），可注入纯函数留测试缝，离线自测 tests/test_backends.py 35 例 CI 常绿）。状态定义见文末。
 
 ## 一、处理器 × 验证状态
 
@@ -19,8 +19,8 @@
 | uvc | uvc_formats / uvc_capture_frames | ✅ | ✅ | ❌ | opencv-python |
 | pd | pd_attach / pd_negotiate / measure_voltage | ✅ | ✅ | ❌ | **前置：Lab5 固件实现遥测输出契约**（见下） |
 | ble | ble_scan_connect / gatt_discover / notify | ✅ | ✅ | ❌ | 屏蔽箱 + 适配器 |
-| uac | uac_record_level | ⚠️ 仅 mock | ✅ | — | 需 OS 音频路由 + sounddevice 后端（未实现） |
-| dock | dock_topology / hub_port_cycle | ✅ | ✅ | ❌ | Linux lsusb（Windows 建议接 UsbTreeView CLI） |
+| uac | uac_record_level | ✅ 代码完整（sounddevice 可选依赖，未装时优雅失败） | ✅ | ❌ 待工装 | OS 音频路由（DUT 麦克风→工控机默认输入设备）+ pip install sounddevice |
+| dock | dock_topology / hub_port_cycle | ✅ | ✅ | ❌ | Linux: lsusb -t；Windows: UsbTreeView.exe CLI（/c /f 文本导出，参数以 UsbTreeView 官方文档为准）优先 → pnputil /enum-devices（Win10 2004+ 内置，zh-CN GBK 输出已兼容）回退。pnputil 枚举路径已在 zh-CN Windows 开发机实测（主机侧枚举非 dock DUT 联调） |
 
 ## 二、PD 固件↔测试工具契约（待闭合的口子）
 
