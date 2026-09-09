@@ -11,3 +11,8 @@ specs_local/
 
 # Windows 构建产物
 apps/win/build/
+
+# evolve 驱动运行痕迹（2026-09-10 退役，见 ROADMAP T2）
+.auto-evolve.lock
+docs/auto-evolve-driver.log
+tools/reports/
