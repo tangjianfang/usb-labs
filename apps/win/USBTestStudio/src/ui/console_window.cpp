@@ -1,6 +1,8 @@
 // console_window.cpp — EP-4 通信控制台窗口实现（上区 S2 设备发现 + 下区 S3 会话
 // 标签台）。未真机编译，按 MSDN 口径编写。
+// 日志：ui.console（info=窗口/扫描/会话生命周期，debug=过滤与选中逐操作，warn=可恢复失败，err=致命失败）。
 #include "ui/console_window.h"
+#include "app/log.h"
 
 #include "discovery/catalog_build.h"
 #include "discovery/msc_enum.h"
@@ -23,6 +25,8 @@ constexpr UINT kMsgCatalogDone = WM_APP + 1;
 // 目录列（96dpi 基准宽；layout 按窗口 DPI 重新应用）
 const wchar_t* const kColTitles[] = {L"#", L"名称", L"VID:PID", L"协议", L"端口路径"};
 constexpr int kColWidths[] = {40, 210, 90, 52, 460};
+
+auto slog = ustlog::logger("ui.console");
 
 HWND create_control(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style,
                     int child_id) {
@@ -47,10 +51,15 @@ bool ConsoleWindow::register_class(HINSTANCE hinst) {
     wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     wc.lpszClassName = kClassName;
-    return ::RegisterClassExW(&wc) != 0;
+    if (::RegisterClassExW(&wc) == 0) {
+        slog->error("注册控制台窗口类失败 GetLastError=0x{:08X}", ::GetLastError());
+        return false;
+    }
+    return true;
 }
 
 ConsoleWindow::~ConsoleWindow() {
+    slog->info("控制台窗口销毁");
     // m_panes 逐个析构：面板先断接收回调再销毁窗口，通道 close 前先 join 读线程
     if (m_accel) ::DestroyAcceleratorTable(m_accel);
     if (m_font) ::DeleteObject(m_font);
@@ -62,9 +71,11 @@ ConsoleWindow* ConsoleWindow::create(HINSTANCE hinst, int nCmdShow) {
                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                                   nullptr, nullptr, hinst, w);
     if (!w->m_hwnd) {
+        slog->error("创建控制台窗口失败 GetLastError=0x{:08X}", ::GetLastError());
         delete w;
         return nullptr;
     }
+    slog->info("控制台窗口已创建");
     w->m_dpi = ::GetDpiForWindow(w->m_hwnd);
     int cw = w->S(1000), ch = w->S(560);
     RECT work{};
@@ -295,6 +306,7 @@ void ConsoleWindow::layout() {
 // 扫描 / 过滤 / 会话
 // ---------------------------------------------------------------------------
 void ConsoleWindow::do_scan() {
+    slog->info("触发设备扫描");
     if (m_status) {
         const wchar_t* s = L"扫描中…";
         ::SendMessageW(m_status, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(s));
@@ -314,6 +326,7 @@ void ConsoleWindow::do_scan() {
 void ConsoleWindow::handle_scan_done(std::vector<ConsoleDevice>* catalog) {
     if (!catalog) return;
     m_catalog = std::move(*catalog);
+    slog->info("扫描完成：目录设备 {} 台", m_catalog.size());
     refill();
     wchar_t done[48];
     ::swprintf(done, 48, L"扫描完成 · 双击设备行开会话");
@@ -337,6 +350,8 @@ void ConsoleWindow::refill() {
     wchar_t query[256];
     ::GetWindowTextW(m_search, query, 256);
     m_view = filter_devices(m_catalog, query, kind_mask());
+    slog->debug("过滤刷新 关键词\"{}\" 命中 {}/{}", ustlog::w2u(query), m_view.size(),
+                m_catalog.size());
 
     ::SendMessageW(m_list, LVM_DELETEALLITEMS, 0, 0);
     wchar_t num[16];
@@ -365,15 +380,18 @@ void ConsoleWindow::on_activate_item() {
         ::SendMessageW(m_list, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_SELECTED));
     if (i < 0 || i >= static_cast<int>(m_view.size())) return;
     const ConsoleDevice& d = m_view[static_cast<size_t>(i)];
+    slog->debug("双击选中设备 [{}] {} {}", i, ustlog::w2u(d.name), ustlog::w2u(d.vidpid_text()));
 
     std::unique_ptr<IChannel> ch = catalog_build::make_channel(d);
     if (!ch) {
+        slog->warn("设备 [{}] 不支持开会话", ustlog::w2u(d.name));
         ::MessageBoxW(m_hwnd, L"该设备类型暂不支持开会话。", L"通信控制台",
                       MB_ICONINFORMATION);
         return;
     }
     std::wstring err;
     if (!ch->open(&err)) {
+        slog->warn("打开会话失败: {}", ustlog::w2u(err));
         const std::wstring msg_ = L"打开会话失败：" + err;
         ::MessageBoxW(m_hwnd, msg_.c_str(), L"通信控制台", MB_ICONWARNING);
         return;
@@ -386,6 +404,7 @@ void ConsoleWindow::on_activate_item() {
 
     SessionPane* pane = SessionPane::create(m_hwnd, std::move(ch), std::move(title));
     if (!pane) {
+        slog->warn("创建会话面板失败: {}", ustlog::w2u(display));
         ::MessageBoxW(m_hwnd, L"创建会话面板失败。", L"通信控制台", MB_ICONWARNING);
         return;
     }
@@ -401,6 +420,7 @@ void ConsoleWindow::on_activate_item() {
     on_tab_switch();
     layout();
 
+    slog->info("会话已开: {}", ustlog::w2u(display));
     const std::wstring info = L"会话已开: " + display + L"（右键标签可关闭）";
     ::SendMessageW(m_status, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(info.c_str()));
     status_refresh();
@@ -408,6 +428,7 @@ void ConsoleWindow::on_activate_item() {
 
 void ConsoleWindow::on_tab_switch() {
     const int cur = static_cast<int>(::SendMessageW(m_tabs, TCM_GETCURSEL, 0, 0));
+    slog->debug("切换会话标签 -> {}", cur);
     for (size_t k = 0; k < m_panes.size(); ++k)
         m_panes[k]->show(static_cast<int>(k) == cur);   // 只显示当前标签的面板
 }
@@ -427,6 +448,8 @@ void ConsoleWindow::on_tab_rclick() {
 
 void ConsoleWindow::close_session(int idx) {
     if (idx < 0 || idx >= static_cast<int>(m_panes.size())) return;
+    slog->info("关闭会话 [{}] {}", idx,
+               ustlog::w2u(m_panes[static_cast<size_t>(idx)]->title()));
     m_panes.erase(m_panes.begin() + idx);   // ~SessionPane：断回调→销毁窗→close 通道
     ::SendMessageW(m_tabs, TCM_DELETEITEM, static_cast<WPARAM>(idx), 0);
     if (!m_panes.empty()) {

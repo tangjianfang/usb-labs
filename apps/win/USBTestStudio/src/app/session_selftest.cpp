@@ -4,6 +4,7 @@
 // 历史游标语义、帧日志环形与清账、SessionCore 时间基准）的纯逻辑行为面。
 // S3 后半 UI 接线（session_view 渲染游标在此覆盖；session_pane/console_window
 // 为纯 Win32 接线层，随整片真机验收）。
+#include "app/log.h"
 #include "session/session_codec.h"
 #include "session/session_core.h"
 #include "session/session_view.h"
@@ -40,6 +41,8 @@ static ChannelFrame mk_frame(bool out, std::initializer_list<uint8_t> b,
 }
 
 int main() {
+    ustlog::init(/*also_stdout=*/true, L"usts-session");   // 日志规范见 app/log.h
+
     // —— 发送框 auto 判定（§4.3） ——
     {   // 纯十六进制 + 空白 → Hex
         auto r = parse_send_text(L"01 02", SendEncoding::auto_detect);

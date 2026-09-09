@@ -3,6 +3,8 @@
 // 同一 IChannel 契约：open/close、send(bytes)、on_receive(cb)、set_timeout、描述信息。
 // 实现方约定：send 为同步语义；接收由后台读线程驱动回调（回调内在读线程上下文，
 // UI 层需自行投递消息，勿在回调内重入 open/close）。
+// 日志：本文件为纯抽象契约/结构定义，不打日志——级别语义统一归各实现层
+//（channel.serial / channel.hid / channel.usb / channel.msc）。
 #pragma once
 
 #include <cstdint>

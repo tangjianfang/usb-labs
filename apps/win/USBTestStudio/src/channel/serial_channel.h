@@ -2,10 +2,13 @@
 // 适配既有 SerialPort（CDC/串口，重叠 I/O），后台读线程持续 read_some，
 // 每个非空读片计为一帧并回调；send 同步 write_all。COMMTIMEOUTS 的 20ms
 // 字节间隔兜底使读片天然贴合"帧"。模板化 PortT 以便离线自测注入回显假件。
+// 日志：channel.serial（info=开关通道，debug=逐帧收发/超时调整，warn=读线程退出，
+// err=失败带 err 串）。
 #pragma once
 
 #include "channel/channel.h"
 #include "usb/serial_port.h"
+#include "app/log.h"
 
 #include <atomic>
 #include <thread>
@@ -19,25 +22,43 @@ public:
 
     bool open(std::wstring* err = nullptr) override {
         if (is_open()) close();
-        if (!m_port.open(m_name, m_baud, err)) return false;
+        const ULONGLONG t0 = ::GetTickCount64();
+        ustlog::logger("channel.serial")->info("打开串口通道 {} @{} 8N1",
+                                               ustlog::w2u(m_name), m_baud);
+        if (!m_port.open(m_name, m_baud, err)) {
+            ustlog::logger("channel.serial")->error(
+                "打开串口通道 {} 失败（{} ms）：{}", ustlog::w2u(m_name),
+                ::GetTickCount64() - t0, err ? ustlog::w2u(*err) : std::string{});
+            return false;
+        }
         m_desc.kind = L"serial";
         m_desc.path = PortT::device_path(m_name);
         m_desc.display = m_name + L" @" + std::to_wstring(m_baud) + L" 8N1";
         m_stop = false;
         m_reader = std::thread([this] { read_loop(); });
+        ustlog::logger("channel.serial")->info("串口通道 {} 打开完成（{} ms），读线程已启动",
+                                               ustlog::w2u(m_name), ::GetTickCount64() - t0);
         return true;
     }
     void close() noexcept override {
+        const bool was_open = is_open();
         if (m_reader.joinable()) {
             m_stop = true;
             m_reader.join();            // 先停线程再关句柄，避免读线程操作已关句柄
         }
         m_port.close();
+        if (was_open)
+            ustlog::logger("channel.serial")->info("串口通道 {} 已关闭", ustlog::w2u(m_name));
     }
     bool is_open() const noexcept override { return m_port.is_open(); }
 
     bool send(const uint8_t* data, size_t len, std::wstring* err = nullptr) override {
-        if (!m_port.write_all(data, len, err)) return false;
+        if (!m_port.write_all(data, len, err)) {
+            ustlog::logger("channel.serial")->error("串口发送 {} 字节失败：{}", len,
+                                                    err ? ustlog::w2u(*err) : std::string{});
+            return false;
+        }
+        ustlog::logger("channel.serial")->log(spdlog::level::debug, "串口发送一帧 {} 字节", len);
         std::lock_guard<std::mutex> g(m_mtx);
         m_stats.tx_frames += 1;
         m_stats.tx_bytes += len;
@@ -48,7 +69,11 @@ public:
         std::lock_guard<std::mutex> g(m_mtx);
         m_cb = std::move(cb);
     }
-    void set_read_timeout(unsigned ms) noexcept override { m_read_ms = ms ? ms : 200; }
+    void set_read_timeout(unsigned ms) noexcept override {
+        m_read_ms = ms ? ms : 200;
+        ustlog::logger("channel.serial")->log(spdlog::level::debug, "串口读轮片超时={}ms",
+                                              m_read_ms);
+    }
     const ChannelDesc& desc() const noexcept override { return m_desc; }
 
     // 底层端口直访：产测引擎的环回/遥测等专用流程仍走 Port 原生接口
@@ -63,8 +88,14 @@ private:
         std::vector<uint8_t> buf(4096);
         while (!m_stop) {
             size_t got = 0;
-            if (!m_port.read_some(buf.data(), buf.size(), m_read_ms, &got)) return; // 句柄失效即退出
+            if (!m_port.read_some(buf.data(), buf.size(), m_read_ms, &got)) {
+                ustlog::logger("channel.serial")->warn(
+                    "串口读线程退出：read_some 失败（句柄失效或设备拔出）");
+                return; // 句柄失效即退出
+            }
             if (got == 0) continue;
+            ustlog::logger("channel.serial")->log(spdlog::level::debug, "串口收到一帧 {} 字节",
+                                                  got);
             ReceiveCallback cb;
             {
                 std::lock_guard<std::mutex> g(m_mtx);

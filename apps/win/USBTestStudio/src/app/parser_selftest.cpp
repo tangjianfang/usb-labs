@@ -8,6 +8,7 @@
 // 无（数值核对自缓存 HUT-1.3 §4：GD 页 0x01 内 02 Mouse/06 Keyboard/07 Keypad、
 // §15 Consumer 0x0C）、帧解析分发、frame_line 解析行装配、RenderCursor
 // 原始|解析切换。UI 面板接线随整片真机验收。
+#include "app/log.h"
 #include "parser/hid_parser.h"
 #include "parser/parser_select.h"
 #include "session/session_core.h"
@@ -54,6 +55,8 @@ static std::wstring cn(std::initializer_list<uint8_t> b) {
 }
 
 int main() {
+    ustlog::init(/*also_stdout=*/true, L"usts-parser");   // 日志规范见 app/log.h
+
     // —— 键盘页键码表（HUT-1.3 §10 原文核对） ——
     check(keycode_name(0x04) && wcscmp(keycode_name(0x04), L"A") == 0, "keycode 04=A");
     check(keycode_name(0x1D) && wcscmp(keycode_name(0x1D), L"Z") == 0, "keycode 1D=Z");

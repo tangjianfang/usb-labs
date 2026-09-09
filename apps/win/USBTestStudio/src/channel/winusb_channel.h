@@ -8,10 +8,13 @@
 // 目录接线（usb 行 → 本通道）随 S5 后半与 MSC 一并落——设备接口路径须由
 // GUID 枚举产出，非 DeviceEnumerator 现有实例路径。模板化 PortT 以便离线
 // 自测注入回显假件。
+// 日志：channel.usb（info=开关通道，debug=逐传输收发/超时调整，warn=读线程退出，
+// err=失败带 err 串）。
 #pragma once
 
 #include "channel/channel.h"
 #include "usb/winusb_port.h"
+#include "app/log.h"
 
 #include <atomic>
 #include <thread>
@@ -24,7 +27,14 @@ public:
 
     bool open(std::wstring* err = nullptr) override {
         if (is_open()) close();
-        if (!m_port.open(m_path, err)) return false;
+        const ULONGLONG t0 = ::GetTickCount64();
+        ustlog::logger("channel.usb")->info("打开 WinUSB 通道 path={}", ustlog::w2u(m_path));
+        if (!m_port.open(m_path, err)) {
+            ustlog::logger("channel.usb")->error("打开 WinUSB 通道失败（{} ms）：{}",
+                                                 ::GetTickCount64() - t0,
+                                                 err ? ustlog::w2u(*err) : std::string{});
+            return false;
+        }
         const WinUsbCaps& c = m_port.caps();
         m_desc.kind = L"usb";
         m_desc.path = m_path;
@@ -34,21 +44,39 @@ public:
         m_desc.display = wraii::fmt_v(L"WinUSB %04X:%04X IN 0x%02X(%s) OUT 0x%02X(%s)",
                                       c.vid, c.pid, c.in_pipe, in_kind, c.out_pipe, out_kind);
         m_stop = false;
-        if (c.in_pipe)                       // 只出不进的设备无从驱动读线程
+        if (c.in_pipe) {                     // 只出不进的设备无从驱动读线程
             m_reader = std::thread([this] { read_loop(); });
+        } else {
+            ustlog::logger("channel.usb")->log(spdlog::level::debug,
+                                               "WinUSB 无 IN 管道，读线程未启动");
+        }
+        ustlog::logger("channel.usb")->info("WinUSB 通道打开完成（{} ms）：{}",
+                                            ::GetTickCount64() - t0,
+                                            ustlog::w2u(m_desc.display));
         return true;
     }
     void close() noexcept override {
+        const bool was_open = is_open();
         if (m_reader.joinable()) {
             m_stop = true;
             m_reader.join();            // 读线程至多阻塞一个轮片（m_read_ms）
         }
         m_port.close();
+        if (was_open)
+            ustlog::logger("channel.usb")->info("WinUSB 通道已关闭 path={}", ustlog::w2u(m_path));
     }
     bool is_open() const noexcept override { return m_port.is_open(); }
 
     bool send(const uint8_t* data, size_t len, std::wstring* err = nullptr) override {
-        if (!m_port.write_pipe(data, len, err, kSendTimeoutMs)) return false;
+        if (!m_port.write_pipe(data, len, err, kSendTimeoutMs)) {
+            ustlog::logger("channel.usb")->error("WinUSB OUT 发送 {} 字节失败（超时 {}ms）：{}",
+                                                 len, kSendTimeoutMs,
+                                                 err ? ustlog::w2u(*err) : std::string{});
+            return false;
+        }
+        ustlog::logger("channel.usb")->log(spdlog::level::debug,
+                                           "WinUSB OUT 发送 {} 字节（超时 {}ms）", len,
+                                           kSendTimeoutMs);
         std::lock_guard<std::mutex> g(m_mtx);
         m_stats.tx_frames += 1;
         m_stats.tx_bytes += len;
@@ -59,7 +87,11 @@ public:
         std::lock_guard<std::mutex> g(m_mtx);
         m_cb = std::move(cb);
     }
-    void set_read_timeout(unsigned ms) noexcept override { m_read_ms = ms ? ms : 100; }
+    void set_read_timeout(unsigned ms) noexcept override {
+        m_read_ms = ms ? ms : 100;
+        ustlog::logger("channel.usb")->log(spdlog::level::debug, "WinUSB 读轮片超时={}ms",
+                                           m_read_ms);
+    }
     const ChannelDesc& desc() const noexcept override { return m_desc; }
 
     // 底层端口直访：产测引擎的控制传输等专用流程仍走 Port 原生接口
@@ -75,6 +107,8 @@ private:
             std::vector<uint8_t> buf;
             bool timed_out = false;
             if (m_port.read_pipe(buf, m_read_ms, &timed_out)) {
+                ustlog::logger("channel.usb")->log(spdlog::level::debug,
+                                                   "WinUSB IN 收到一帧 {} 字节", buf.size());
                 ReceiveCallback cb;
                 {
                     std::lock_guard<std::mutex> g(m_mtx);
@@ -86,6 +120,8 @@ private:
             } else if (timed_out) {
                 continue;               // 轮空：设备本周期无 IN 传输
             } else {
+                ustlog::logger("channel.usb")->warn(
+                    "WinUSB 读线程退出：read_pipe 失败（常见为设备拔出）");
                 return;                 // 读错误（常见为拔出）→ 退出读线程
             }
         }

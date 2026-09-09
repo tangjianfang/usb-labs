@@ -1,9 +1,10 @@
 // device_enumerator.cpp — SetupDiGetClassDevsW/SetupDiEnumDeviceInterfaces/
 // SetupDiGetDeviceInterfaceDetailW 两段式枚举 + CM_Get_DevNode_PropertyW 取
 // HardwareIds / BusReportedDeviceDesc / InstanceId。
-// 未真机编译，按 MSDN 口径编写（不确定点见文件尾与 README）。
+// 日志：discovery（info=扫描类目与计数，debug=逐设备明细，err=枚举失败）。
 #include "usb/device_enumerator.h"
 
+#include "app/log.h"
 #include "framework/win32_rai.h"
 
 #include <initguid.h>   // DEVPKEY_* 常量在本 TU 实例化（必须先于 devpropdef/cfgmgr32）
@@ -22,6 +23,8 @@
 #pragma comment(lib, "hid.lib")
 
 namespace {
+
+auto dlog = ustlog::logger("discovery");
 
 // GUID_DEVINTERFACE_USB_DEVICE（usbiodef.h 同值；此处自行定义避免 initguid 全局实例化冲突）
 // {A5DCBF10-6530-11D2-901F-00C04FB951ED}
@@ -122,10 +125,14 @@ std::wstring hid_product_string(const std::wstring& path) {
 
 void scan_interface_class(const GUID& guid, const wchar_t* cls, std::vector<DeviceInfo>& out,
                           std::wstring* err) {
+    dlog->info("扫描设备接口类 {}…", ustlog::w2u(cls));
+    const size_t before = out.size();
     wraii::uhandle<wraii::hdevinfo_closer> set(::SetupDiGetClassDevsW(
         &guid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE));
     if (!set.valid()) {
         if (err && err->empty()) *err = wraii::win_err(L"SetupDiGetClassDevsW", ::GetLastError());
+        dlog->error("SetupDiGetClassDevsW({}) 失败 GetLastError=0x{:08X}", ustlog::w2u(cls),
+                    ::GetLastError());
         return;
     }
 
@@ -189,8 +196,11 @@ void scan_interface_class(const GUID& guid, const wchar_t* cls, std::vector<Devi
         if (d.name.empty() && d.class_name == L"HID") d.name = hid_product_string(d.path);
         d.instance_path = devprop_string(dn, DEVPKEY_Device_InstanceId);
 
+        dlog->log(spdlog::level::debug, "发现 [{}] VID_{:04X}&PID_{:04X} name={}",
+                  ustlog::w2u(cls), d.vid, d.pid, ustlog::w2u(d.name));
         out.push_back(std::move(d));
     }
+    dlog->info("扫描 {} 完成：{} 台", ustlog::w2u(cls), out.size() - before);
 }
 
 } // namespace
@@ -199,8 +209,10 @@ std::vector<DeviceInfo> DeviceEnumerator::scan(std::wstring* err) {
     std::vector<DeviceInfo> out;
     GUID hidGuid = {};
     ::HidD_GetHidGuid(&hidGuid);
+    const ULONGLONG t0 = ::GetTickCount64();
     scan_interface_class(kUsbDeviceGuid, L"USB", out, err);
     scan_interface_class(hidGuid, L"HID", out, err);
+    dlog->info("设备扫描完成：共 {} 台（{} ms）", out.size(), ::GetTickCount64() - t0);
     return out;
 }
 

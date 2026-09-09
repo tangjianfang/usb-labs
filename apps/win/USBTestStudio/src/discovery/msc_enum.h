@@ -4,10 +4,12 @@
 // 名称尽力而为取 INQUIRY vendor/product，失败回退 "USB 大容量磁盘 N"。
 // INQUIRY/READ_CAPACITY 不读介质，扫描无副作用。已知边界：行内无 USB
 // VID:PID（盘句柄侧只有 SCSI 身份；USBSTOR 节点交叉匹配留待真机样本）。
+// 日志：discovery（info=扫描开始/结束+计数，debug=逐盘探测，warn=探测失败跳过）。
 #pragma once
 
 #include "discovery/device_catalog.h"
 #include "usb/msc_scsi.h"
+#include "app/log.h"
 
 #include <string>
 #include <vector>
@@ -36,21 +38,33 @@ inline constexpr unsigned kScanTimeoutS = kMscProbeTimeoutS;
 template <typename PortT = MscScsi>
 std::vector<ConsoleDevice> scan_impl(std::wstring* err = nullptr) {
     std::vector<ConsoleDevice> out;
+    auto lg = ustlog::logger("discovery");
+    const ULONGLONG t0 = ::GetTickCount64();
+    lg->info("开始扫描 USB 大容量盘（PhysicalDrive0..9，探测超时 {}s）", kScanTimeoutS);
     for (unsigned i = 0; i < 10; ++i) {
         PortT probe;
-        if (!probe.open_physical_drive(i, /*write_access=*/false, nullptr)) continue;
+        if (!probe.open_physical_drive(i, /*write_access=*/false, nullptr)) {
+            lg->log(spdlog::level::debug, "PhysicalDrive{} 只读打开失败/不存在，跳过", i);
+            continue;
+        }
+        lg->log(spdlog::level::debug, "PhysicalDrive{} 只读打开成功，查询总线型别", i);
         bool usb = false;
         std::wstring e;
         if (!probe.bus_is_usb(&usb, &e)) {       // 属性查询失败：记录后跳过
+            lg->warn("PhysicalDrive{} 总线型别查询失败，跳过：{}", i, ustlog::w2u(e));
             if (err && err->empty()) *err = e;
             continue;
         }
-        if (!usb) continue;                      // 非 USB 盘（系统盘等）静默跳过
+        if (!usb) {                              // 非 USB 盘（系统盘等）静默跳过
+            lg->log(spdlog::level::debug, "PhysicalDrive{} 非 USB 盘，跳过", i);
+            continue;
+        }
         unsigned long long sectors = 0;
         unsigned blk = 0;
         if (!probe.read_capacity(&sectors, &blk, &e, kScanTimeoutS)) {
             // 探测失败/超时可见（对抗复核 2c：休眠待起转的慢盘从目录消失时留线索，
             // 而非无声少一行）
+            lg->warn("PhysicalDrive{} 探测失败/超时，跳过：{}", i, ustlog::w2u(e));
             if (err && err->empty())
                 *err = wraii::fmt_v(L"PhysicalDrive%u 探测失败/超时: %s", i, e.c_str());
             continue;                            // 无介质/不响应
@@ -65,8 +79,11 @@ std::vector<ConsoleDevice> scan_impl(std::wstring* err = nullptr) {
             for (unsigned char c : p16)
                 if (c) id.push_back(wchar_t(c));
         }
+        lg->log(spdlog::level::debug, "PhysicalDrive{} 容量 {} 扇区 × {}B，入列：身份='{}'",
+                i, sectors, blk, ustlog::w2u(id));
         out.push_back(make_device(i, id));
     }
+    lg->info("USB 大容量盘扫描完成：{} 个（{} ms）", out.size(), ::GetTickCount64() - t0);
     return out;
 }
 

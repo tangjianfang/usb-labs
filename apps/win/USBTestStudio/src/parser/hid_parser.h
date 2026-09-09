@@ -15,9 +15,12 @@
 //    B8 Eject/CD Play·Pause/E2 Mute/E9 Vol+/EA Vol−，报告取 1~2 字节 LE 用量值。
 // 纯逻辑无 Win32 依赖：S4 后半 UI 解析面板直接复用；Report ID 由 has_report_id
 // 剥离（HidChannel 对 Report ID 透传，多报告描述符会话在 UI 侧声明）。
+// 日志：parser.hid（debug=解码成功含报告类型+关键字段，warn=解码失败/错误状态
+// 可继续；统一入口 parse_hid_report 不打避免与 format_* 重复）。
 #pragma once
 
 #include "session/session_codec.h"
+#include "app/log.h"
 
 #include <cstdint>
 #include <string>
@@ -70,16 +73,31 @@ inline std::wstring modifier_names(uint8_t mods) {
 // 样例 02 00 04 00 … → "LShift+A↓"；全零 → "（无按键）"；键码数组含 0x01 →
 // "ErrorRollOver"。返回宽串供解析面板与产测报告共用。
 inline std::wstring format_keyboard(const uint8_t* data, size_t len) {
-    if (len == 0) return L"（空报告）";
+    if (len == 0) {
+        ustlog::logger("parser.hid")->warn("HID 键盘解码失败：空报告（0 字节）");
+        return L"（空报告）";
+    }
     const uint8_t mods = data[0];
     std::wstring out = modifier_names(mods);
     if (len >= 3) {
         for (size_t i = 2; i < len; ++i) {
             const uint8_t k = data[i];
             if (k == 0x00) continue;
-            if (k == 0x01) return L"ErrorRollOver（超 6 键）";
-            if (k == 0x02) return L"POSTFail";
-            if (k == 0x03) return L"ErrorUndefined";
+            if (k == 0x01) {
+                ustlog::logger("parser.hid")->warn(
+                    "HID 键盘解码遇错误键码 0x01 ErrorRollOver（超 6 键，len={}）", len);
+                return L"ErrorRollOver（超 6 键）";
+            }
+            if (k == 0x02) {
+                ustlog::logger("parser.hid")->warn("HID 键盘解码遇错误键码 0x02 POSTFail（len={}）",
+                                                   len);
+                return L"POSTFail";
+            }
+            if (k == 0x03) {
+                ustlog::logger("parser.hid")->warn(
+                    "HID 键盘解码遇错误键码 0x03 ErrorUndefined（len={}）", len);
+                return L"ErrorUndefined";
+            }
             const wchar_t* n = keycode_name(k);
             if (n) {
                 if (!out.empty()) out += L'+';
@@ -92,7 +110,13 @@ inline std::wstring format_keyboard(const uint8_t* data, size_t len) {
             }
         }
     }
-    if (out.empty()) return L"（无按键）";
+    if (out.empty()) {
+        ustlog::logger("parser.hid")->debug("HID 键盘解码成功 len={} 修饰键位图=0x{:02X} → 无按键",
+                                            len, mods);
+        return L"（无按键）";
+    }
+    ustlog::logger("parser.hid")->debug("HID 键盘解码成功 len={} 修饰键位图=0x{:02X} 键值={}", len,
+                                        mods, ustlog::w2u(out));
     return out + L"↓";
 }
 
@@ -120,7 +144,10 @@ inline int mouse_axis(const uint8_t* p, unsigned bytes) {   // LE 有符号扩�
 }
 
 inline std::wstring format_mouse(const uint8_t* data, size_t len, MouseFormat fmt) {
-    if (len == 0) return L"（空报告）";
+    if (len == 0) {
+        ustlog::logger("parser.hid")->warn("HID 鼠标解码失败：空报告（0 字节）");
+        return L"（空报告）";
+    }
     std::wstring out;
     const uint8_t buttons = data[0];
     static const wchar_t* const k_btn[] = {L"左键", L"右键", L"中键"};
@@ -136,16 +163,25 @@ inline std::wstring format_mouse(const uint8_t* data, size_t len, MouseFormat fm
         swprintf(buf, 32, L" X%+d", mouse_axis(data + off, fmt.x_bytes));
         out += buf;
         off += fmt.x_bytes;
+    } else {
+        ustlog::logger("parser.hid")->warn(
+            "HID 鼠标报告长度不足：len={} 缺 X 轴（需 {}B），按键位图仍可显示", len, fmt.x_bytes);
     }
     if (off + fmt.y_bytes <= len) {
         swprintf(buf, 32, L" Y%+d", mouse_axis(data + off, fmt.y_bytes));
         out += buf;
         off += fmt.y_bytes;
+    } else {
+        ustlog::logger("parser.hid")->warn("HID 鼠标报告长度不足：len={} 缺 Y 轴（需 {}B）", len,
+                                           fmt.y_bytes);
     }
     if (fmt.wheel && off < len) {
         swprintf(buf, 32, L" 滚轮%+d", mouse_axis(data + off, 1));
         out += buf;
     }
+    ustlog::logger("parser.hid")->debug(
+        "HID 鼠标解码成功 len={} 按钮位图=0x{:02X}（x{}B/y{}B 滚轮={}）→ {}", len, buttons,
+        fmt.x_bytes, fmt.y_bytes, fmt.wheel, ustlog::w2u(out));
     return out;
 }
 
@@ -170,11 +206,20 @@ inline const wchar_t* consumer_usage_name(uint16_t u) {
 }
 
 inline std::wstring format_consumer(const uint8_t* data, size_t len) {
-    if (len == 0) return L"（空报告）";
+    if (len == 0) {
+        ustlog::logger("parser.hid")->warn("HID 消费页解码失败：空报告（0 字节）");
+        return L"（空报告）";
+    }
     const uint16_t u = (len >= 2) ? uint16_t(data[0] | (data[1] << 8)) : data[0];
-    if (const wchar_t* n = consumer_usage_name(u)) return n;
+    if (const wchar_t* n = consumer_usage_name(u)) {
+        ustlog::logger("parser.hid")->debug("HID 消费页解码成功 len={} 用量=0x{:04X} → {}", len, u,
+                                            ustlog::w2u(n));
+        return n;
+    }
     wchar_t buf[16];
     swprintf(buf, 16, L"0x%04X?", unsigned(u));
+    ustlog::logger("parser.hid")->warn("HID 消费页解码失败：未收录用量 0x{:04X}（len={}，回退十六进制显示）",
+                                       u, len);
     return buf;
 }
 

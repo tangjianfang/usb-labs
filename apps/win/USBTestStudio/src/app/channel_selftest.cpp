@@ -5,6 +5,7 @@
 //    回调/统计/关闭等会话契约——即设计 §3 "调试台与产测引擎共用同一套通道" 的行为面；
 // 3) WinUsbPort 纯逻辑（路径 VID/PID 解析、数据管道选型）直接离线验证。
 // 真机收发验收（S1/S5 验收口径）仍按切片表在真机上执行。
+#include "app/log.h"
 #include "channel/hid_channel.h"
 #include "channel/msc_channel.h"
 #include "channel/serial_channel.h"
@@ -357,6 +358,8 @@ static bool wait_for(const std::function<bool()>& pred, unsigned timeout_ms = 20
 }
 
 int wmain() {
+    ustlog::init(/*also_stdout=*/true, L"usts-channel");   // 日志规范见 app/log.h
+
     // device_path 规则（真件静态逻辑）
     check(SerialPort::device_path(L"COM7") == L"\\\\.\\COM7", "device_path COM7");
     check(SerialPort::device_path(L"COM10") == L"\\\\.\\COM10", "device_path COM10");

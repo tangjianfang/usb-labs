@@ -4,12 +4,21 @@
 // 协议复选框 = kind 位掩码二次过滤。纯逻辑无 Win32 依赖：S2 后半的 UI 表格
 // 与产测引擎复用同一套。匹配域 = 名称+VID:PID+路径+协议标签（含英文同义词，
 // 如串口可被 cdc/serial 命中）。"输 2341 三秒定位目标" 的收敛即此过滤器。
+// 日志：discovery（debug=逐次过滤统计；逐设备匹配纯函数不打日志）。
 #pragma once
 
 #include <cwchar>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "app/log.h"
 
 // 设备协议种类（兼作复选框位掩码；S5 后半起 usb/msc 细分落地）
 enum class DeviceKind : unsigned {
@@ -101,5 +110,8 @@ inline std::vector<ConsoleDevice> filter_devices(const std::vector<ConsoleDevice
     std::vector<ConsoleDevice> out;
     for (const auto& d : devices)
         if (device_matches(d, query, kind_mask)) out.push_back(d);
+    ustlog::logger("discovery")->log(spdlog::level::debug,
+        "目录过滤：query='{}' kind_mask={:#x} → 命中 {}/{} 行",
+        ustlog::w2u(std::wstring(query)), kind_mask, out.size(), devices.size());
     return out;
 }

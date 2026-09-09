@@ -1,10 +1,16 @@
-// winusb_port.cpp — WinUSB 管道访问实现。未真机运行，按 MSDN 口径编写。
+// winusb_port.cpp — WinUSB 管道访问实现。
+// 日志：channel.usb（info=开关口/管道拓扑，debug=读写细节，err=失败带错误码）。
 #include "usb/winusb_port.h"
+#include "app/log.h"
 
 #include <cstdio>
 #include <cstring>
 
 #pragma comment(lib, "winusb.lib")
+
+namespace {
+auto ulog = ustlog::logger("channel.usb");
+} // namespace
 
 void winusb_iface_closer::close(H h) noexcept {
     if (h) ::WinUsb_Free(h);
@@ -87,31 +93,44 @@ bool WinUsbPort::select_data_pipes(const std::vector<WinUsbPipeInfo>& pipes,
 bool WinUsbPort::open(const std::wstring& path, std::wstring* err) {
     close();
     m_caps = {};
+    const ULONGLONG t0 = ::GetTickCount64();
+    ulog->info("打开 WinUSB：{}", ustlog::w2u(path));
 
     // WinUSB 设备须以读写+重叠标志打开（MSDN：WinUsb_Initialize 前置要求）
     m_handle.reset(::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
                                  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                                  FILE_FLAG_OVERLAPPED, nullptr));
     if (!m_handle.valid()) {
-        if (err) *err = wraii::win_err(L"CreateFileW(WinUSB)", ::GetLastError());
+        const std::wstring e = wraii::win_err(L"CreateFileW(WinUSB)", ::GetLastError());
+        if (err) *err = e;
+        ulog->error("WinUSB CreateFileW 失败：{}（0x{:08X}）", ustlog::w2u(e), ::GetLastError());
         return false;
     }
 
     WINUSB_INTERFACE_HANDLE iface = nullptr;
     if (!::WinUsb_Initialize(m_handle.get(), &iface) || iface == nullptr) {
-        if (err) *err = wraii::win_err(L"WinUsb_Initialize", ::GetLastError());
+        const std::wstring e = wraii::win_err(L"WinUsb_Initialize", ::GetLastError());
+        if (err) *err = e;
         // 常见根因：设备未绑定 WinUSB 驱动（INF/复合固件缺 MS OS 描述符）
+        ulog->error("WinUsb_Initialize 失败：{}（常见根因：设备未绑定 WinUSB 驱动）",
+                    ustlog::w2u(e));
         m_handle.reset();
         return false;
     }
     m_iface.reset(iface);
 
     parse_vid_pid(path, &m_caps.vid, &m_caps.pid);
+    ulog->debug("WinUSB 接口句柄就绪，VID:PID={:04X}:{:04X}", m_caps.vid, m_caps.pid);
 
     if (!query_pipes(err)) {
+        ulog->error("WinUSB 管道查询失败：{}", err ? ustlog::w2u(*err) : std::string{});
         close();
         return false;
     }
+    ulog->info("WinUSB 打开完成（{} ms）：{:04X}:{:04X} in=0x{:02X}({} {}B) out=0x{:02X}({} {}B)",
+               ::GetTickCount64() - t0, m_caps.vid, m_caps.pid, m_caps.in_pipe,
+               m_caps.in_is_bulk ? "bulk" : "intr", m_caps.in_max_packet, m_caps.out_pipe,
+               m_caps.out_is_bulk ? "bulk" : "intr", m_caps.out_max_packet);
     return true;
 }
 
@@ -136,12 +155,18 @@ bool WinUsbPort::query_pipes(std::wstring* err) {
             return false;
         }
         m_caps.n_pipes += 1;
-        if (pi.PipeType != UsbdPipeTypeBulk && pi.PipeType != UsbdPipeTypeInterrupt) continue;
+        if (pi.PipeType != UsbdPipeTypeBulk && pi.PipeType != UsbdPipeTypeInterrupt) {
+            ulog->log(spdlog::level::debug, "管道 [{}] type={} id=0x{:02X}（非数据管道，跳过）", i,
+                      static_cast<int>(pi.PipeType), pi.PipeId);
+            continue;
+        }
         pipes.push_back(WinUsbPipeInfo{
             static_cast<unsigned char>(pi.PipeId),
             (pi.PipeId & 0x80) != 0,
             pi.PipeType == UsbdPipeTypeBulk,
             pi.MaximumPacketSize});
+        ulog->log(spdlog::level::debug, "管道 [{}] id=0x{:02X} {} {}B", i, pi.PipeId,
+                  pi.PipeType == UsbdPipeTypeBulk ? "bulk" : "intr", pi.MaximumPacketSize);
     }
     unsigned char in_id = 0, out_id = 0;
     bool in_bulk = false, out_bulk = false;
@@ -200,9 +225,11 @@ bool WinUsbPort::read_pipe(std::vector<uint8_t>& buf, unsigned timeout_ms, bool*
             DWORD got2 = 0;
             if (::GetOverlappedResult(m_handle.get(), &ov, &got2, TRUE) && got2 > 0) {
                 buf.resize(got2);
+                ulog->log(spdlog::level::debug, "WinUSB RX {}B（超时窗口内竞态完成，按成功交付）", got2);
                 return true;
             }
             if (timed_out) *timed_out = true;
+            ulog->warn("WinUSB 读超时 {}ms（AbortPipe 已投递）", timeout_ms);
             return false;
         }
         if (wait != WAIT_OBJECT_0) {
@@ -233,9 +260,11 @@ bool WinUsbPort::read_pipe(std::vector<uint8_t>& buf, unsigned timeout_ms, bool*
 
     if (got == 0) {
         if (err) *err = L"读到 0 字节";
+        ulog->warn("WinUSB IN 管道读到 0 字节");
         return false;
     }
     buf.resize(got);
+    ulog->log(spdlog::level::debug, "WinUSB RX {}B", got);
     return true;
 }
 
@@ -284,6 +313,7 @@ bool WinUsbPort::write_pipe(const uint8_t* data, size_t len, std::wstring* err,
                 have_done = true;
             } else {
                 if (err) *err = L"写超时：设备未接收 OUT 传输（固件未处理该管道？）";
+                ulog->warn("WinUSB 写 {}B 超时 {}ms（AbortPipe 已投递）", len, timeout_ms);
                 return false;
             }
         } else if (wait != WAIT_OBJECT_0) {
@@ -304,7 +334,9 @@ bool WinUsbPort::write_pipe(const uint8_t* data, size_t len, std::wstring* err,
     }
     if (done != len) {
         if (err) *err = wraii::fmt_v(L"短写：%lu / %zu 字节", done, len);
+        ulog->error("WinUSB 短写 {}/{}B", done, len);
         return false;
     }
+    ulog->log(spdlog::level::debug, "WinUSB TX {}B", len);
     return true;
 }

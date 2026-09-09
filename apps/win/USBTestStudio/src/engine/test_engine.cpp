@@ -1,10 +1,16 @@
 // test_engine.cpp — 引擎实现：计划解析、步骤分发、判定、报告。未真机编译，按 MSDN 口径编写。
+// 日志：engine（info=计划加载/产测起止/报告/退出码，debug=步骤开始与自动探测，warn=步骤失败等可恢复，err=计划解析失败）。
 #include "engine/test_engine.h"
+#include "app/log.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+
+namespace {
+auto slog = ustlog::logger("engine");
+} // namespace
 
 // ---------------------------------------------------------------------------
 // MessagePumpEvents：有界队列 + 丢弃计数；步骤/完成事件堆载 payload
@@ -65,6 +71,7 @@ TestEngine::~TestEngine() { stop_and_join(); }
 
 void TestEngine::stop_and_join() noexcept {
     if (m_thread.joinable()) {
+        slog->info("停止产测线程并等待退出");
         m_thread.request_stop();
         m_thread.join();
     }
@@ -175,20 +182,30 @@ bool TestEngine::parse_plan_value(const minijson::Value& root, TestPlan& plan, s
 }
 
 bool TestEngine::load_plan(const std::wstring& json_path, std::wstring* err) {
+    slog->info("加载测试计划: {}", ustlog::w2u(json_path));
     std::wstring text;
-    if (!wraii::read_text_file_utf8(json_path, text, err)) return false;
+    if (!wraii::read_text_file_utf8(json_path, text, err)) {
+        slog->error("读取计划文件失败: {}", err ? ustlog::w2u(*err) : std::string{});
+        return false;
+    }
 
     minijson::Value root;
     std::wstring perr;
     size_t ppos = 0;
     if (!minijson::parse(text, root, &perr, &ppos)) {
         if (err) *err = wraii::fmt_v(L"JSON 解析失败 @字符 %zu: %s", ppos, perr.c_str());
+        slog->error("计划 JSON 解析失败 @字符 {}: {}", ppos, ustlog::w2u(perr));
         return false;
     }
 
     TestPlan plan;
-    if (!parse_plan_value(root, plan, err)) return false;
+    if (!parse_plan_value(root, plan, err)) {
+        slog->error("计划结构解析失败: {}", err ? ustlog::w2u(*err) : std::string{});
+        return false;
+    }
 
+    slog->info("计划解析完成: {} 工位 {} DUT {} 共 {} 步", ustlog::w2u(plan.name),
+               ustlog::w2u(plan.station), ustlog::w2u(plan.dut_sn), plan.steps.size());
     std::lock_guard<std::mutex> lk(m_mtx);
     m_plan = std::move(plan);
     m_plan_loaded = true;
@@ -205,6 +222,8 @@ void TestEngine::run(std::stop_token st) {
         plan = m_plan;
     }
     const int total = static_cast<int>(plan.steps.size());
+    slog->info("=== 产测开始 计划[{}] 工位[{}] DUT[{}] 共 {} 步 ===", ustlog::w2u(plan.name),
+               ustlog::w2u(plan.station), ustlog::w2u(plan.dut_sn), total);
 
     m_ev.on_log(wraii::LogLevel::Info,
                 wraii::fmt_v(L"=== 测试开始 计划[%s] 工位[%s] DUT[%s]，共 %d 步 ===",
@@ -214,11 +233,17 @@ void TestEngine::run(std::stop_token st) {
     bool aborted = false;
 
     for (int i = 0; i < total; ++i) {
-        if (st.stop_requested()) { aborted = true; break; }
+        if (st.stop_requested()) {
+            aborted = true;
+            slog->info("收到停止请求，产测中止于步骤 {}/{}", i + 1, total);
+            break;
+        }
         const PlanStep& stp = plan.steps[static_cast<size_t>(i)];
         m_ev.on_log(wraii::LogLevel::Info,
                     wraii::fmt_v(L"▶ 步骤 %d/%d %s (%s)", i + 1, total, stp.name.c_str(),
                                  stp.type.c_str()));
+        slog->debug("步骤 {}/{} [{}] 开始（{}）", i + 1, total, ustlog::w2u(stp.name),
+                    ustlog::w2u(stp.type));
 
         // 步骤级超时 + 用户停止，统一以 CancelFn 注入各模块
         ULONGLONG t0 = ::GetTickCount64();
@@ -236,10 +261,19 @@ void TestEngine::run(std::stop_token st) {
         m_ev.on_log(r.pass ? wraii::LogLevel::Info : wraii::LogLevel::Error,
                     wraii::fmt_v(L"%s | %s %s", r.pass ? L"PASS" : L"FAIL", r.name.c_str(),
                                  r.note.c_str()));
+        if (r.pass)
+            slog->debug("步骤 {}/{} [{}] PASS {}", i + 1, total, ustlog::w2u(r.name),
+                        ustlog::w2u(r.note));
+        else
+            slog->warn("步骤 {}/{} [{}] FAIL {}", i + 1, total, ustlog::w2u(r.name),
+                       ustlog::w2u(r.note));
         m_ev.on_step(i, total, r);
         if (r.pass) ++passed; else ++failed;
     }
-    if (!aborted && st.stop_requested()) aborted = true;
+    if (!aborted && st.stop_requested()) {
+        aborted = true;
+        slog->info("收到停止请求，产测中止");
+    }
 
     const bool verdict = !aborted && failed == 0 && (passed + failed) > 0;
 
@@ -248,10 +282,13 @@ void TestEngine::run(std::stop_token st) {
     ::CreateDirectoryW(dir.c_str(), nullptr);   // 已存在时静默失败，可忽略
     std::wstring path = dir + L"\\" + suggest_report_name();
     std::wstring werr;
-    if (write_report_to(path, &werr))
+    if (write_report_to(path, &werr)) {
         m_ev.on_log(wraii::LogLevel::Info, L"报告已写盘: " + path);
-    else
+        slog->info("报告已写盘: {}", ustlog::w2u(path));
+    } else {
         m_ev.on_log(wraii::LogLevel::Warn, L"报告写盘失败: " + werr + L"（可用 Ctrl+S 导出）");
+        slog->warn("报告写盘失败: {}（可手动导出）", ustlog::w2u(werr));
+    }
 
     const int code = aborted ? static_cast<int>(ExitCode::Aborted)
                              : (verdict ? static_cast<int>(ExitCode::Pass)
@@ -259,6 +296,8 @@ void TestEngine::run(std::stop_token st) {
     m_ev.on_log(wraii::LogLevel::Info,
                 wraii::fmt_v(L"=== 测试结束 判定 %s 退出码 %d ===",
                              aborted ? L"ABORTED" : (verdict ? L"PASS" : L"FAIL"), code));
+    slog->info("=== 产测结束 判定 {} 退出码 {} ===",
+               aborted ? "ABORTED" : (verdict ? "PASS" : "FAIL"), code);
     m_ev.on_done(verdict, code);
 }
 
@@ -313,7 +352,11 @@ void TestEngine::ensure_scan() {
     if (m_scan.empty()) {
         std::wstring err;
         m_scan = DeviceEnumerator::scan(&err);
-        if (!err.empty()) m_ev.on_log(wraii::LogLevel::Warn, L"枚举告警: " + err);
+        slog->debug("设备枚举完成：{} 台", m_scan.size());
+        if (!err.empty()) {
+            m_ev.on_log(wraii::LogLevel::Warn, L"枚举告警: " + err);
+            slog->warn("设备枚举告警: {}", ustlog::w2u(err));
+        }
     }
 }
 
@@ -335,7 +378,10 @@ StepResult TestEngine::step_enumerate(const PlanStep&) {
     m_scan.clear();
     std::wstring err;
     m_scan = DeviceEnumerator::scan(&err);
-    if (!err.empty()) m_ev.on_log(wraii::LogLevel::Warn, L"枚举告警: " + err);
+    if (!err.empty()) {
+        m_ev.on_log(wraii::LogLevel::Warn, L"枚举告警: " + err);
+        slog->warn("设备枚举告警: {}", ustlog::w2u(err));
+    }
 
     long long matched = 0;
     auto matches = [this](const DeviceInfo& d) {
@@ -482,6 +528,7 @@ StepResult TestEngine::step_msc_inquiry(const PlanStep&) {
     StepResult r;
     int drive = m_plan.device.drive >= 0 ? static_cast<int>(m_plan.device.drive)
                                          : MscScsi::auto_detect_usb_drive();
+    slog->debug("MSC inquiry 目标盘：PhysicalDrive{}", drive);
     if (drive < 0) return fail_step(L"未发现 USB 大容量存储盘（PhysicalDrive 自动探测失败）");
 
     MscScsi msc;
@@ -504,6 +551,7 @@ StepResult TestEngine::step_msc_capacity(const PlanStep& st) {
     StepResult r;
     int drive = m_plan.device.drive >= 0 ? static_cast<int>(m_plan.device.drive)
                                          : MscScsi::auto_detect_usb_drive();
+    slog->debug("MSC capacity 目标盘：PhysicalDrive{}", drive);
     if (drive < 0) return fail_step(L"未发现 USB 大容量存储盘");
 
     MscScsi msc;
@@ -525,6 +573,7 @@ StepResult TestEngine::step_msc_read_verify(const PlanStep& st, const CancelFn& 
     StepResult r;
     int drive = m_plan.device.drive >= 0 ? static_cast<int>(m_plan.device.drive)
                                          : MscScsi::auto_detect_usb_drive();
+    slog->debug("MSC read_verify 目标盘：PhysicalDrive{}", drive);
     if (drive < 0) return fail_step(L"未发现 USB 大容量存储盘");
 
     MscScsi msc;

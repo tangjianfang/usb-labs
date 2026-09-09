@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# 公共头文件路径：本库源码 + vendored spdlog（日志规范见 src/app/log.h 文件头）
+set(UTS_COMMON_INC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include
+)
+
 add_executable(USBTestStudio WIN32
     src/app/main.cpp
     src/framework/win32_rai.cpp
@@ -21,13 +27,14 @@ add_executable(USBTestStudio WIN32
     src/ui/session_pane.cpp
 )
 
-target_include_directories(USBTestStudio PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(USBTestStudio PRIVATE ${UTS_COMMON_INC})
 
 target_compile_definitions(USBTestStudio PRIVATE
     UNICODE _UNICODE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES   # wchar 路径：LOCALAPPDATA 含中文用户名时 fopen/窄路径会炸
 )
 
 # /W4 /utf-8 /permissive-（CMake MSVC 生成器；permissive- 由 MSVC 默认在 C++20 下开启，此处显式声明）
@@ -56,12 +63,13 @@ add_executable(channel_selftest
     src/usb/winusb_port.cpp
     src/usb/msc_scsi.cpp
 )
-target_include_directories(channel_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(channel_selftest PRIVATE ${UTS_COMMON_INC})
 target_compile_definitions(channel_selftest PRIVATE
     UNICODE _UNICODE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES   # wchar 路径：LOCALAPPDATA 含中文用户名时 fopen/窄路径会炸
 )
 if(MSVC)
     target_compile_options(channel_selftest PRIVATE /W4 /utf-8 /permissive-)
@@ -78,12 +86,13 @@ add_executable(discovery_selftest
     src/usb/winusb_port.cpp
     src/usb/msc_scsi.cpp
 )
-target_include_directories(discovery_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(discovery_selftest PRIVATE ${UTS_COMMON_INC})
 target_compile_definitions(discovery_selftest PRIVATE
     UNICODE _UNICODE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES   # wchar 路径：LOCALAPPDATA 含中文用户名时 fopen/窄路径会炸
 )
 if(MSVC)
     target_compile_options(discovery_selftest PRIVATE /W4 /utf-8 /permissive-)
@@ -94,11 +103,12 @@ target_link_libraries(discovery_selftest PRIVATE setupapi cfgmgr32 hid winusb)
 add_executable(session_selftest
     src/app/session_selftest.cpp
 )
-target_include_directories(session_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(session_selftest PRIVATE ${UTS_COMMON_INC})
 target_compile_definitions(session_selftest PRIVATE
     UNICODE _UNICODE
     NOMINMAX
     _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES   # wchar 路径：LOCALAPPDATA 含中文用户名时 fopen/窄路径会炸
 )
 if(MSVC)
     target_compile_options(session_selftest PRIVATE /W4 /utf-8 /permissive-)
@@ -109,11 +119,12 @@ endif()
 add_executable(parser_selftest
     src/app/parser_selftest.cpp
 )
-target_include_directories(parser_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(parser_selftest PRIVATE ${UTS_COMMON_INC})
 target_compile_definitions(parser_selftest PRIVATE
     UNICODE _UNICODE
     NOMINMAX
     _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES   # wchar 路径：LOCALAPPDATA 含中文用户名时 fopen/窄路径会炸
 )
 if(MSVC)
     target_compile_options(parser_selftest PRIVATE /W4 /utf-8 /permissive-)

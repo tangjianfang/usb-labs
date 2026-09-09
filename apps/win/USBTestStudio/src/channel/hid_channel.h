@@ -8,10 +8,13 @@
 // 读线程口径：超时=轮空继续；非超时错误（常见为设备拔出）=线程退出，
 // 与 SerialChannelT 同——通道仍报 is_open，由会话台感知无帧后提示。
 // 模板化 PortT 以便离线自测注入回显假件。
+// 日志：channel.hid（info=开关通道，debug=逐报告收发/超时调整，warn=读线程退出，
+// err=失败带 err 串）。
 #pragma once
 
 #include "channel/channel.h"
 #include "usb/hid_port.h"
+#include "app/log.h"
 
 #include <atomic>
 #include <thread>
@@ -24,7 +27,14 @@ public:
 
     bool open(std::wstring* err = nullptr) override {
         if (is_open()) close();
-        if (!m_port.open(m_path, err)) return false;
+        const ULONGLONG t0 = ::GetTickCount64();
+        ustlog::logger("channel.hid")->info("打开 HID 通道 path={}", ustlog::w2u(m_path));
+        if (!m_port.open(m_path, err)) {
+            ustlog::logger("channel.hid")->error("打开 HID 通道失败（{} ms）：{}",
+                                                 ::GetTickCount64() - t0,
+                                                 err ? ustlog::w2u(*err) : std::string{});
+            return false;
+        }
         m_port.set_num_input_buffers(64);   // best-effort：调大环形缓冲防高速设备丢报告
         const HidCapsInfo& c = m_port.caps();
         m_desc.kind = L"hid";
@@ -37,19 +47,34 @@ public:
         m_desc.hid_report_id = c.has_report_id;
         m_stop = false;
         m_reader = std::thread([this] { read_loop(); });
+        ustlog::logger("channel.hid")->info(
+            "HID 通道打开完成（{} ms）：{} usage_page={:#06x} usage={:#06x} report_id={}，读线程已启动",
+            ::GetTickCount64() - t0, ustlog::w2u(m_desc.display), c.usage_page, c.usage,
+            c.has_report_id);
         return true;
     }
     void close() noexcept override {
+        const bool was_open = is_open();
         if (m_reader.joinable()) {
             m_stop = true;
             m_reader.join();            // 读线程至多阻塞一个轮片（m_read_ms）
         }
         m_port.close();
+        if (was_open)
+            ustlog::logger("channel.hid")->info("HID 通道已关闭 path={}", ustlog::w2u(m_path));
     }
     bool is_open() const noexcept override { return m_port.is_open(); }
 
     bool send(const uint8_t* data, size_t len, std::wstring* err = nullptr) override {
-        if (!m_port.set_output_report(data, len, err, kSendTimeoutMs)) return false;
+        if (!m_port.set_output_report(data, len, err, kSendTimeoutMs)) {
+            ustlog::logger("channel.hid")->error("HID 发送 {} 字节失败（超时 {}ms）：{}", len,
+                                                 kSendTimeoutMs,
+                                                 err ? ustlog::w2u(*err) : std::string{});
+            return false;
+        }
+        ustlog::logger("channel.hid")->log(spdlog::level::debug,
+                                           "HID 发送输出报告 {} 字节（超时 {}ms）", len,
+                                           kSendTimeoutMs);
         std::lock_guard<std::mutex> g(m_mtx);
         m_stats.tx_frames += 1;
         m_stats.tx_bytes += len;
@@ -60,7 +85,11 @@ public:
         std::lock_guard<std::mutex> g(m_mtx);
         m_cb = std::move(cb);
     }
-    void set_read_timeout(unsigned ms) noexcept override { m_read_ms = ms ? ms : 100; }
+    void set_read_timeout(unsigned ms) noexcept override {
+        m_read_ms = ms ? ms : 100;
+        ustlog::logger("channel.hid")->log(spdlog::level::debug, "HID 读轮片超时={}ms",
+                                           m_read_ms);
+    }
     const ChannelDesc& desc() const noexcept override { return m_desc; }
 
     // 底层端口直访：产测引擎的回报率测量等专用流程仍走 Port 原生接口
@@ -76,6 +105,8 @@ private:
             std::vector<uint8_t> report;
             bool timed_out = false;
             if (m_port.read_overlapped(report, m_read_ms, &timed_out)) {
+                ustlog::logger("channel.hid")->log(spdlog::level::debug,
+                                                   "HID 收到输入报告 {} 字节", report.size());
                 ReceiveCallback cb;
                 {
                     std::lock_guard<std::mutex> g(m_mtx);
@@ -87,6 +118,8 @@ private:
             } else if (timed_out) {
                 continue;               // 轮空：设备本周期无输入报告
             } else {
+                ustlog::logger("channel.hid")->warn(
+                    "HID 读线程退出：read_overlapped 失败（常见为设备拔出）");
                 return;                 // 读错误（常见为拔出）→ 退出读线程
             }
         }

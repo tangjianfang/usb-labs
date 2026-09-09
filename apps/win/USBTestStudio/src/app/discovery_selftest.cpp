@@ -4,6 +4,7 @@
 // MSC 盘行（msc_enum：真 PhysicalDrive 属性查询，无 U 盘机器上空表同样绿）、
 // 目录组装与会话工厂（catalog_build：DeviceInfo/MSC/COM 合流 + 四通道创建口径）。
 // UI 表格与双击开会话的窗口层按切片表另行（真机）验收。
+#include "app/log.h"
 #include "discovery/catalog_build.h"
 #include "discovery/device_catalog.h"
 #include "discovery/msc_enum.h"
@@ -79,6 +80,8 @@ private:
 };
 
 int wmain() {
+    ustlog::init(/*also_stdout=*/true, L"usts-discovery");   // 日志规范见 app/log.h
+
     const auto devs = fixture();
 
     // ---- 展示文本 ----

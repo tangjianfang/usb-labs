@@ -1,5 +1,7 @@
 // main_window.cpp — 主窗口实现。未真机编译，按 MSDN 口径编写。
+// 日志：ui.main（info=生命周期/产测里程碑/退出码，debug=逐操作，warn=可恢复失败，err=致命失败）。
 #include "ui/main_window.h"
+#include "app/log.h"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -18,6 +20,8 @@ constexpr wchar_t kWindowTitle[] = L"USBTestStudio — USB 产线测试上位机
 constexpr UINT kMsgScanDone = WM_APP + 4;
 
 constexpr int kLogChildId = 1234;
+
+auto slog = ustlog::logger("ui.main");
 
 HWND create_control(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style,
                     int child_id) {
@@ -52,7 +56,11 @@ bool MainWindow::register_class(HINSTANCE hinst) {
     wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     wc.lpszClassName = kClassName;
-    return ::RegisterClassExW(&wc) != 0;
+    if (::RegisterClassExW(&wc) == 0) {
+        slog->error("注册主窗口类失败 GetLastError=0x{:08X}", ::GetLastError());
+        return false;
+    }
+    return true;
 }
 
 MainWindow::MainWindow(const std::wstring& plan_path, const std::wstring& dut_sn,
@@ -60,6 +68,7 @@ MainWindow::MainWindow(const std::wstring& plan_path, const std::wstring& dut_sn
     : m_planPath(plan_path), m_dutSn(dut_sn), m_station(station), m_autoExit(auto_exit) {}
 
 MainWindow::~MainWindow() {
+    slog->info("主窗口销毁");
     if (m_engine) m_engine->stop_and_join();   // 先停引擎线程（成员逆序析构前显式收口）
     if (m_accel) ::DestroyAcceleratorTable(m_accel);
     if (m_font) ::DeleteObject(m_font);
@@ -73,9 +82,13 @@ MainWindow* MainWindow::create(HINSTANCE hinst, int nCmdShow, const std::wstring
                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                                   nullptr, nullptr, hinst, w);
     if (!w->m_hwnd) {
+        slog->error("创建主窗口失败 GetLastError=0x{:08X}", ::GetLastError());
         delete w;
         return nullptr;
     }
+    slog->info("主窗口已创建 计划\"{}\" 工位\"{}\" DUT\"{}\" 自动退出={}",
+               ustlog::w2u(plan_path), ustlog::w2u(station), ustlog::w2u(dut_sn),
+               auto_exit ? "是" : "否");
     // 初始尺寸按窗口 DPI 缩放并居中
     w->m_dpi = ::GetDpiForWindow(w->m_hwnd);
     int cw = w->S(1180), ch = w->S(720);
@@ -307,7 +320,9 @@ LRESULT MainWindow::on_message(UINT msg, WPARAM wp, LPARAM lp) {
             if (m_engine && m_engine->running()) {
                 m_engine->request_stop();
                 m_lastExitCode = static_cast<int>(ExitCode::Aborted);
+                slog->info("窗口关闭中止产测，退出码 {}", m_lastExitCode);
             }
+            slog->info("主窗口退出，PostQuitMessage(退出码 {})", m_lastExitCode);
             ::PostQuitMessage(m_lastExitCode);
             return 0;
 
@@ -344,6 +359,9 @@ bool MainWindow::try_load_plan(bool announce) {
         if (announce) {
             m_log.append(wraii::LogLevel::Info, L"计划已加载: " + path);
             const TestPlan& p = m_engine->plan();
+            slog->info("计划已加载: {}（{}，工位 {}，DUT {}，共 {} 步）", ustlog::w2u(path),
+                       ustlog::w2u(p.name), ustlog::w2u(p.station), ustlog::w2u(p.dut_sn),
+                       p.steps.size());
             m_station = p.station;
             m_dutSn = p.dut_sn;
             m_log.append(wraii::LogLevel::Info,
@@ -355,6 +373,7 @@ bool MainWindow::try_load_plan(bool announce) {
         return true;
     }
     m_log.append(wraii::LogLevel::Error, L"计划加载失败: " + err);
+    slog->error("计划加载失败: {}（{}）", ustlog::w2u(path), ustlog::w2u(err));
     if (m_autoExit) ::PostQuitMessage(static_cast<int>(ExitCode::PlanError));
     return false;
 }
@@ -363,6 +382,7 @@ bool MainWindow::try_load_plan(bool announce) {
 // 动作
 // ---------------------------------------------------------------------------
 void MainWindow::do_scan() {
+    slog->info("触发设备扫描");
     m_log.append(wraii::LogLevel::Info, L"扫描 USB/HID 设备…");
     HWND hwnd = m_hwnd;
     std::jthread([hwnd]() {
@@ -379,6 +399,7 @@ void MainWindow::do_scan() {
 void MainWindow::handle_scan_done(std::vector<DeviceInfo>* devices) {
     if (!devices) return;
     m_devices = *devices;
+    slog->info("扫描完成：{} 台设备", m_devices.size());
     fill_device_views();
     m_log.append(wraii::LogLevel::Info,
                  wraii::fmt_v(L"扫描完成：%u 台设备（USB + HID）",
@@ -439,7 +460,9 @@ void MainWindow::fill_steps_table(const std::wstring& pending_text) {
 
 void MainWindow::do_run() {
     if (m_running.load()) return;
+    slog->info("产测 run 触发");
     if (!try_load_plan(true)) {
+        slog->warn("未找到测试计划: {}", ustlog::w2u(m_planPath));
         { const std::wstring msg_ = L"未找到测试计划：\n" + m_planPath +
                        L"\n\n请将 plan.json 放在 exe 同目录，或用 --plan <路径> 指定。"; ::MessageBoxW(m_hwnd, msg_.c_str(), L"USBTestStudio", MB_ICONWARNING); }
         return;
@@ -448,6 +471,7 @@ void MainWindow::do_run() {
     ::SendMessageW(m_prog, PBM_SETPOS, 0, 0);
     set_running_ui(true);
     status_set(0, L"测试运行中…");
+    slog->info("产测启动");
     m_engine->start();
 }
 
@@ -473,9 +497,11 @@ void MainWindow::do_export() {
     std::wstring err;
     if (m_engine->write_report_to(file, &err)) {
         m_log.append(wraii::LogLevel::Info, L"报告已导出: " + std::wstring(file));
+        slog->info("报告已导出: {}", ustlog::w2u(file));
         status_set(0, L"报告已导出");
     } else {
         m_log.append(wraii::LogLevel::Error, L"导出失败: " + err);
+        slog->warn("报告导出失败: {}", ustlog::w2u(err));
     }
 }
 
@@ -527,6 +553,10 @@ void MainWindow::handle_engine_step(StepEvent* ev) {
     }
     std::wstring detail = metrics + ev->result.note;
     ListView_SetItemText(m_lvStep, i, 4, const_cast<LPWSTR>(detail.c_str()));
+    if (ev->result.pass)
+        slog->debug("步骤 {}/{} PASS {}", i + 1, ev->total, ustlog::w2u(detail));
+    else
+        slog->warn("步骤 {}/{} FAIL {}", i + 1, ev->total, ustlog::w2u(detail));
 
     ::SendMessageW(m_prog, PBM_SETPOS, ev->total > 0 ? (i + 1) * 100 / ev->total : 100, 0);
     status_set(0, wraii::fmt_v(L"步骤 %d/%d %s", i + 1, ev->total,
@@ -549,6 +579,7 @@ void MainWindow::handle_engine_done(DoneEvent* ev) {
     }
     m_droppedTotal += dropped;
 
+    slog->info("产测完成 判定 {} 退出码 {}", ev->all_pass ? "PASS" : "FAIL", ev->exit_code);
     wchar_t verdict[16];
     ::swprintf(verdict, 16, L"%s（退出码 %d）", ev->all_pass ? L"PASS" : L"FAIL", ev->exit_code);
     status_set(3, verdict);

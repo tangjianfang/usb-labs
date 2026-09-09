@@ -6,9 +6,12 @@
 // 字符与非法定符显示 '.'——一行一帧口径，\r\n 等控制符不换行）。时间戳：
 // 绝对（一天内毫秒 → HH:MM:SS.mmm）与相对（自会话基准 → 500ms / 1.234s）。
 // 纯逻辑无 Win32 依赖：S3 后半的 UI 收发区直接复用，产测报告同口径。
+// 日志：session.codec（debug=发送编码判定与逐字节视图解码操作，
+// warn=发送解析失败可恢复；to_hex/to_ascii 逐字节循环内不打日志）。
 #pragma once
 
 #include "channel/channel.h"
+#include "app/log.h"
 
 #include <cstdint>
 #include <cwchar>
@@ -88,6 +91,8 @@ inline SendParseResult parse_send_text(std::wstring_view text, SendEncoding mode
     if (as_hex) {
         if (!hex_only) {
             r.error = L"Hex 模式仅允许 0-9A-Fa-f 与空白";
+            ustlog::logger("session.codec")->warn(
+                "发送解析失败：Hex 锁定含非 hex 字符（输入 {} 字符，放弃发送）", text.size());
             return r;
         }
         std::vector<int> nibbles;
@@ -98,8 +103,13 @@ inline SendParseResult parse_send_text(std::wstring_view text, SendEncoding mode
         r.bytes.reserve(nibbles.size() / 2);
         for (size_t i = 0; i < nibbles.size(); i += 2)
             r.bytes.push_back(uint8_t((nibbles[i] << 4) | nibbles[i + 1]));
+        ustlog::logger("session.codec")->debug(
+            "发送编码判定 HEX：{} 个 hex 位{} → {} 字节", digits,
+            digits % 2 ? "（奇数补前导 0）" : "", r.bytes.size());
     } else {
         sc_utf8_append(r.bytes, text);
+        ustlog::logger("session.codec")->debug("发送编码判定 ASCII：{} 字符 → UTF-8 {} 字节",
+                                               text.size(), r.bytes.size());
     }
     return r;
 }

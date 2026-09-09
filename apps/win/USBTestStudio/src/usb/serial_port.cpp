@@ -1,9 +1,15 @@
-// serial_port.cpp — 串口重叠 I/O、环回与 PD 遥测采集。未真机编译，按 MSDN 口径编写。
+// serial_port.cpp — 串口重叠 I/O、环回与 PD 遥测采集。
+// 日志：channel.serial（info=开关口，debug=读写细节，err=失败带 GetLastError）。
 #include "usb/serial_port.h"
+#include "app/log.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+
+namespace {
+auto slog = ustlog::logger("channel.serial");
+} // namespace
 
 // ---------------------------------------------------------------------------
 // SerialPort
@@ -16,18 +22,25 @@ std::wstring SerialPort::device_path(const std::wstring& port) {
 bool SerialPort::open(const std::wstring& port, unsigned baud, std::wstring* err) {
     close();
     m_port = port;
+    const ULONGLONG t0 = ::GetTickCount64();
+    slog->info("打开串口 {} @{} 8N1", ustlog::w2u(device_path(port)), baud);
     m_handle.reset(::CreateFileW(device_path(port).c_str(), GENERIC_READ | GENERIC_WRITE, 0,
                                  nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
     if (!m_handle.valid()) {
-        if (err) *err = wraii::win_err(L"CreateFileW(COM)", ::GetLastError());
+        const std::wstring e = wraii::win_err(L"CreateFileW(COM)", ::GetLastError());
+        if (err) *err = e;
+        slog->error("打开串口 {} 失败（{} ms）：{}", ustlog::w2u(port), ::GetTickCount64() - t0,
+                  ustlog::w2u(e));
         m_port.clear();
         return false;
     }
     if (!configure_dcb(baud, 8, ONESTOPBIT, NOPARITY, err)) {
+        slog->error("串口 {} DCB 配置失败", ustlog::w2u(port));
         close();
         return false;
     }
     purge();
+    slog->info("串口 {} 打开完成（{} ms）", ustlog::w2u(port), ::GetTickCount64() - t0);
     return true;
 }
 
@@ -59,6 +72,8 @@ bool SerialPort::configure_dcb(unsigned baud, unsigned data_bits, unsigned stop_
     dcb.fAbortOnError = FALSE;
     if (!::SetCommState(m_handle.get(), &dcb)) {
         if (err) *err = wraii::win_err(L"SetCommState", ::GetLastError());
+        slog->error("SetCommState 失败 baud={} data={} stop={} parity={}: {}", baud, data_bits,
+                  stop_bits, parity, err ? ustlog::w2u(*err) : std::string{});
         return false;
     }
 
@@ -96,6 +111,7 @@ bool SerialPort::overlapped_xfer(bool write, void* buf, DWORD len, DWORD* done,
     }
     wraii::uhandle<wraii::handle_closer> evt(ov.hEvent);
 
+    const ULONGLONG t0 = ::GetTickCount64();
     BOOL ok = FALSE;
     if (write) ok = ::WriteFile(m_handle.get(), buf, len, nullptr, &ov);
     else       ok = ::ReadFile(m_handle.get(), buf, len, nullptr, &ov);
@@ -103,6 +119,8 @@ bool SerialPort::overlapped_xfer(bool write, void* buf, DWORD len, DWORD* done,
         DWORD e = ::GetLastError();
         if (e != ERROR_IO_PENDING) {
             if (err) *err = wraii::win_err(write ? L"WriteFile(COM)" : L"ReadFile(COM)", e);
+            slog->error("{} {}B 失败 GetLastError=0x{:08X}：{}", write ? "WriteFile" : "ReadFile",
+                      len, e, err ? ustlog::w2u(*err) : std::string{});
             return false;
         }
         DWORD wait = ::WaitForSingleObject(ov.hEvent, timeout_ms);
@@ -111,18 +129,24 @@ bool SerialPort::overlapped_xfer(bool write, void* buf, DWORD len, DWORD* done,
             DWORD dummy = 0;
             ::GetOverlappedResult(m_handle.get(), &ov, &dummy, TRUE);
             if (err) *err = write ? L"写超时" : L"读超时";
+            slog->warn("{} {}B 超时 {}ms（CancelIoEx 已投递）", write ? "WriteFile" : "ReadFile",
+                       len, timeout_ms);
             return false;
         }
         if (!::GetOverlappedResult(m_handle.get(), &ov, done, FALSE)) {
             if (err) *err = wraii::win_err(L"GetOverlappedResult", ::GetLastError());
+            slog->error("GetOverlappedResult 失败 GetLastError=0x{:08X}", ::GetLastError());
             return false;
         }
     } else {
         if (!::GetOverlappedResult(m_handle.get(), &ov, done, FALSE)) {
             if (err) *err = wraii::win_err(L"GetOverlappedResult", ::GetLastError());
+            slog->error("GetOverlappedResult(同步完成) 失败 GetLastError=0x{:08X}", ::GetLastError());
             return false;
         }
     }
+    slog->log(spdlog::level::debug, "{} {}B→{}B（{} ms）", write ? "TX" : "RX", len, *done,
+              ::GetTickCount64() - t0);
     return true;
 }
 
@@ -243,6 +267,9 @@ SerialLoopbackResult serial_loopback_test(SerialPort& port, unsigned repeat,
         r.detail = wraii::fmt_v(L"回读不匹配@%zu B", got_total);
     }
     if (r.ok) r.detail = wraii::fmt_v(L"%zu 字节环回一致，%.0f B/s", pattern.size(), r.bytes_per_sec);
+    slog->log(r.ok ? spdlog::level::info : spdlog::level::err,
+              "串口环回：{}（写 {}B 回读 {}B，{:.0f} B/s）", ustlog::w2u(r.detail),
+              r.bytes_written, r.bytes_read, r.bytes_per_sec);
     return r;
 }
 
@@ -331,5 +358,10 @@ PdTelemetryResult pd_telemetry_collect(SerialPort& port, const std::vector<std::
                                 r.lines_total, keys.size());
     if (r.ok)
         r.detail = wraii::fmt_v(L"%u 行内收齐 %zu 键", r.lines_total, keys.size());
+    slog->log(r.ok ? spdlog::level::info : spdlog::level::warn,
+              "PD 遥测采集：{}（keys={}/{}，原始行 {}）", ustlog::w2u(r.detail),
+              r.values.size(), keys.size(), r.lines_total);
+    for (const auto& [k, v] : r.values)
+        slog->debug("PD 遥测 {}={}", ustlog::w2u(k), ustlog::w2u(v));
     return r;
 }

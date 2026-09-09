@@ -1,6 +1,9 @@
 // msc_scsi.cpp — SCSI PASS-THROUGH DIRECT 实现。已随离线构建编译，未真机运行，
 // 运行时 API 行为按 MSDN 口径编写（复核点见 README 不确定清单 #8~#10）。
+// 日志：channel.msc——pass_through 为全命令咽喉：debug=CDB hex/方向/长度，
+// warn=CHECK CONDITION（SENSE key/ASC/ASCQ），err=直通失败带错误码。
 #include "usb/msc_scsi.h"
+#include "app/log.h"
 
 #include <winioctl.h>
 #include <ntddscsi.h>
@@ -8,6 +11,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+
+namespace {
+auto mlog = ustlog::logger("channel.msc");
+} // namespace
 
 // ---------------------------------------------------------------------------
 // 辅助
@@ -36,14 +43,19 @@ std::wstring MscScsi::device_path(unsigned index) { return drive_device_path(ind
 
 bool MscScsi::open_physical_drive(unsigned index, bool write_access, std::wstring* err) {
     close();
+    const ULONGLONG t0 = ::GetTickCount64();
     DWORD access = write_access ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+    mlog->info("打开 PhysicalDrive{}（{}）", index, write_access ? "读写" : "只读");
     m_handle.reset(::CreateFileW(drive_device_path(index).c_str(), access,
                                  FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0,
                                  nullptr));
     if (!m_handle.valid()) {
-        if (err) *err = wraii::win_err(L"CreateFileW(PhysicalDrive)", ::GetLastError());
+        const std::wstring e = wraii::win_err(L"CreateFileW(PhysicalDrive)", ::GetLastError());
+        if (err) *err = e;
+        mlog->error("打开 PhysicalDrive{} 失败：{}", index, ustlog::w2u(e));
         return false;
     }
+    mlog->debug("PhysicalDrive{} 打开完成（{} ms）", index, ::GetTickCount64() - t0);
     return true;
 }
 
@@ -127,9 +139,16 @@ bool MscScsi::pass_through(const uint8_t* cdb, uint8_t cdb_len, void* data, uint
     if (data && data_dir == SCSI_IOCTL_DATA_OUT) ::memcpy(buf.data() + data_off, data, data_len);
 
     DWORD returned = 0;
+    const ULONGLONG t0 = ::GetTickCount64();
+    mlog->log(spdlog::level::debug, "SCSI CDB[{}] {} dir={} len={} t={}s", cdb_len,
+              spdlog::to_hex(cdb, cdb + cdb_len),
+              data_dir == SCSI_IOCTL_DATA_IN ? "IN" : (data_dir == SCSI_IOCTL_DATA_OUT ? "OUT" : "NA"),
+              data_len, timeout_s == 0 ? 10 : timeout_s);
     if (!::DeviceIoControl(m_handle.get(), IOCTL_SCSI_PASS_THROUGH_DIRECT, buf.data(), total,
                            buf.data(), total, &returned, nullptr)) {
-        if (err) *err = wraii::win_err(L"IOCTL_SCSI_PASS_THROUGH_DIRECT", ::GetLastError());
+        const std::wstring e = wraii::win_err(L"IOCTL_SCSI_PASS_THROUGH_DIRECT", ::GetLastError());
+        if (err) *err = e;
+        mlog->error("SCSI 直通失败（{} ms）：{}", ::GetTickCount64() - t0, ustlog::w2u(e));
         return false;
     }
 
@@ -143,8 +162,11 @@ bool MscScsi::pass_through(const uint8_t* cdb, uint8_t cdb_len, void* data, uint
         if (err)
             *err = wraii::fmt_v(L"SCSI 状态 0x%02X（SENSE key=%u ASC=0x%02X ASCQ=0x%02X）",
                                 ptd->ScsiStatus, m_sense_key, m_sense_asc, m_sense_ascq);
+        mlog->warn("SCSI CHECK CONDITION：状态 0x{:02X} SENSE key={} ASC=0x{:02X} ASCQ=0x{:02X}",
+                   ptd->ScsiStatus, m_sense_key, m_sense_asc, m_sense_ascq);
         return false;
     }
+    mlog->log(spdlog::level::debug, "SCSI 完成（{} ms）", ::GetTickCount64() - t0);
     return true;
 }
 
@@ -162,6 +184,9 @@ bool MscScsi::scsi_inquiry(std::string* vendor8, std::string* product16, std::st
     if (vendor8) *vendor8 = trim_ascii(reinterpret_cast<const char*>(&data[8]), 8);
     if (product16) *product16 = trim_ascii(reinterpret_cast<const char*>(&data[16]), 16);
     if (rev4) *rev4 = trim_ascii(reinterpret_cast<const char*>(&data[32]), 4);
+    mlog->log(spdlog::level::debug, "INQUIRY：vendor='{}' product='{}' rev='{}' type=0x{:02X}",
+              vendor8 ? *vendor8 : std::string{}, product16 ? *product16 : std::string{},
+              rev4 ? *rev4 : std::string{}, periph_type ? *periph_type : 0);
     return true;
 }
 
@@ -200,11 +225,14 @@ MscReadVerifyResult msc_read_verify(MscScsi& d, unsigned long long lba_start, un
     std::wstring err;
     if (!d.read_capacity(&total, &blk, &err, kMscProbeTimeoutS)) {
         r.detail = L"READ_CAPACITY 失败: " + err;
+        mlog->error("只读校验启动失败：{}", ustlog::w2u(r.detail));
         return r;
     }
     r.total_sectors = total;
     r.block_size = blk;
     if (r.blocks_per_read > 128) r.blocks_per_read = 128;   // 单次直通上限 64KB@512B
+    mlog->info("只读校验开始：{} 轮 × {} 块 @LBA{}（盘 {} 扇区 × {}B）", r.loops,
+               r.blocks_per_read, lba_start, total, blk);
 
     ULONGLONG t0 = ::GetTickCount64();
     unsigned long long bytes_ok = 0;
@@ -263,5 +291,8 @@ MscReadVerifyResult msc_read_verify(MscScsi& d, unsigned long long lba_start, un
     if (r.ok)
         r.detail = wraii::fmt_v(L"%u 轮只读校验一致，%.2f MB/s（盘 %llu 扇区 × %u B）", r.loops,
                                 r.mbps, total, blk);
+    mlog->log(r.ok ? spdlog::level::info : spdlog::level::err,
+              "只读校验结束：{}（errors={} unstable={}，{:.2f} MB/s）", ustlog::w2u(r.detail),
+              r.errors, r.unstable, r.mbps);
     return r;
 }

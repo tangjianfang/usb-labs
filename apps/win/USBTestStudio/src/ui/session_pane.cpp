@@ -2,7 +2,9 @@
 // 逻辑在 session_core/session_view（session_selftest 覆盖），本文件只做
 // Win32 控件创建、消息分发与线程编组（读线程→PostMessage→UI 线程入账）。
 // 未真机编译部分已按 MSDN 口径编写，随整片真机验收。
+// 日志：ui.session（info=面板生命周期/状态跃迁，debug=逐操作，warn=可恢复失败，err=致命失败）。
 #include "ui/session_pane.h"
+#include "app/log.h"
 
 #include <commctrl.h>
 
@@ -13,6 +15,8 @@
 namespace {
 
 constexpr wchar_t kPaneClass[] = L"USBTestStudio_SessionPane";
+
+auto slog = ustlog::logger("ui.session");
 
 // WM_APP+2：读线程收到一帧（LPARAM: new std::vector<uint8_t>，UI 侧 delete；
 // console_window 的 kMsgCatalogDone 用 WM_APP+1，本面板局部约定互不冲突）
@@ -58,13 +62,16 @@ SessionPane* SessionPane::create(HWND parent, std::unique_ptr<IChannel> ch,
     p->m_hwnd = ::CreateWindowExW(0, kPaneClass, L"", WS_CHILD, 0, 0, 0, 0, parent,
                                   nullptr, ::GetModuleHandleW(nullptr), p);
     if (!p->m_hwnd) {
+        slog->error("创建会话面板窗口失败 GetLastError=0x{:08X}", ::GetLastError());
         delete p;
         return nullptr;
     }
+    slog->info("会话面板已创建: {}", ustlog::w2u(p->m_title));
     return p;
 }
 
 SessionPane::~SessionPane() {
+    slog->info("会话面板销毁: {}", ustlog::w2u(m_title));
     // 顺序：先断接收回调（读线程不再 Post）→ 销毁窗口（清理子控件/子类化）
     // → unique_ptr 析构通道（close 先 join 读线程再关句柄）
     if (m_channel) m_channel->set_receive_callback({});
@@ -110,8 +117,10 @@ LRESULT SessionPane::on_message(UINT msg, WPARAM wp, LPARAM lp) {
                 if (::SendMessageW(m_chkPeriodic, BM_GETCHECK, 0, 0) == BST_CHECKED) {
                     m_core.periodic.set_interval(parse_interval());
                     m_core.periodic.arm(now_ms());
+                    slog->debug("周期发送已启动，间隔 {}ms", m_core.periodic.interval());
                 } else {
                     m_core.periodic.disarm();
+                    slog->debug("周期发送已停止");
                 }
                 status_refresh();
             } else if (id == IDC_EDIT_INTERVAL && code == EN_CHANGE) {
@@ -121,20 +130,24 @@ LRESULT SessionPane::on_message(UINT msg, WPARAM wp, LPARAM lp) {
                 const bool paused =
                     ::SendMessageW(m_chkPause, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 m_view.set_paused(paused);
+                slog->debug("接收视图{}", paused ? "暂停（后台继续收）" : "恢复");
                 if (!paused) render_poll();   // 恢复即补齐暂停期间仍在账内的帧
             } else if (id == IDC_BTN_CLEAR && code == BN_CLICKED) {
                 ::SetWindowTextW(m_rx, L"");   // 清屏不清账：游标不动，旧帧不回放
             } else if (id == IDC_CHK_HEX && code == BN_CLICKED) {
                 m_view.hex_view =
                     ::SendMessageW(m_chkHex, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                slog->debug("Hex 视图切换: {}", m_view.hex_view ? "开" : "关");
                 render_rebuild();
             } else if (id == IDC_CHK_ABSTS && code == BN_CLICKED) {
                 m_view.absolute_ts =
                     ::SendMessageW(m_chkAbsTs, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                slog->debug("绝对时间戳视图切换: {}", m_view.absolute_ts ? "开" : "关");
                 render_rebuild();
             } else if (id == IDC_CHK_PARSED && code == BN_CLICKED) {
                 m_view.parsed_view =
                     ::SendMessageW(m_chkParsed, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                slog->debug("解析视图切换: {}", m_view.parsed_view ? "开" : "关");
                 render_rebuild();   // 原始|解析切换 = 按新口径看当前账面（§4.7）
             } else if (id == IDC_ENCODING && code == CBN_SELENDOK) {
                 status_refresh();   // 模式名入状态行
@@ -179,6 +192,7 @@ void SessionPane::on_create() {
     // page/usage，HidChannel open 时透传）；HID 已收录选型默认开，无解析器
     // （未收录 usage 组合）置灰——原始视图始终可用
     m_view.parser = parser_select::for_channel(m_channel->desc());
+    slog->debug("解析视图选型: {}", ustlog::w2u(std::wstring(m_view.parser.name())));
     if (m_view.parser.kind == parser_select::PaneParser::Kind::none) {
         ::EnableWindow(m_chkParsed, FALSE);
     } else if (m_view.parser.kind != parser_select::PaneParser::Kind::ascii) {
@@ -332,6 +346,7 @@ void SessionPane::do_send(bool* transport_failed) {
     if (transport_failed) *transport_failed = false;
     if (!m_channel || !m_channel->is_open()) {
         if (transport_failed) *transport_failed = true;   // 传输层失败（周期据此停）
+        slog->warn("发送被拒：通道未打开");
         m_note = L"通道未打开";
         status_refresh();
         return;
@@ -343,11 +358,13 @@ void SessionPane::do_send(bool* transport_failed) {
                                  : session_codec::SendEncoding::auto_detect;
     const auto r = session_codec::parse_send_text(text, mode);
     if (!r.error.empty()) {
+        slog->debug("发送内容解析失败: {}", ustlog::w2u(r.error));
         m_note = r.error;    // 内容问题：不算传输层失败，周期不因此停
         status_refresh();
         return;
     }
     if (r.bytes.empty()) {
+        slog->debug("发送被拒：无可发内容");
         m_note = L"无可发内容";
         status_refresh();
         return;
@@ -362,9 +379,11 @@ void SessionPane::do_send(bool* transport_failed) {
         ::swprintf(n, 48, L"已发 %zu 字节（%s）", r.bytes.size(),
                    r.hex_mode ? L"Hex" : L"ASCII");
         m_note = n;
+        slog->debug("已发送 {} 字节（{}）", r.bytes.size(), r.hex_mode ? "Hex" : "ASCII");
         render_poll();
     } else {
         if (transport_failed) *transport_failed = true;
+        slog->warn("发送失败（传输层）: {}", ustlog::w2u(err));
         m_note = L"发送失败：" + err;
     }
     status_refresh();
@@ -463,6 +482,7 @@ void SessionPane::tick(unsigned long long now) {
     // 传输层失败 → 周期自动停止：NAK 永续的设备会让每次发送都顶满写超时（3s），
     // 继续打节拍 = UI 近乎持续冻结（#71 遗留缺陷池；解析错误/空内容不触发）
     m_core.periodic.disarm();
+    slog->info("周期发送因传输失败自动停止");
     ::SendMessageW(m_chkPeriodic, BM_SETCHECK, BST_UNCHECKED, 0);
     m_note = L"周期已自动停止·" + m_note;
     status_refresh();

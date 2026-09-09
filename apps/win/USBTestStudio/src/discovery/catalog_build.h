@@ -5,6 +5,7 @@
 // 串口→SerialChannel 终端会话、usb→WinUsbChannel 批量管道会话（设备须绑定
 // WinUSB 驱动，open 失败由调用方呈现）、msc→MscChannel 只读 SCSI 直通会话
 //（S5 后半接线）。"双击开会话"到打开通道为止，收发台是 S3 切片。
+// 日志：discovery（info=目录组装计数，debug=逐条目组装/创建通道，warn=未知协议）。
 #pragma once
 
 #include "channel/hid_channel.h"
@@ -14,6 +15,7 @@
 #include "discovery/device_catalog.h"
 #include "discovery/serial_enum.h"
 #include "usb/device_enumerator.h"
+#include "app/log.h"
 
 #include <memory>
 
@@ -32,6 +34,9 @@ inline ConsoleDevice from_device_info(const DeviceInfo& d) {
     c.name = d.name;
     if (c.name.empty()) c.name = c.vidpid_text();
     if (c.name.empty()) c.name = c.kind_text() + L" 设备";
+    ustlog::logger("discovery")->log(spdlog::level::debug,
+        "DeviceInfo→目录条目：{} '{}' VID:PID={:04X}:{:04X} path={}",
+        ustlog::w2u(c.kind_text()), ustlog::w2u(c.name), c.vid, c.pid, ustlog::w2u(c.path));
     return c;
 }
 
@@ -46,18 +51,26 @@ inline std::vector<ConsoleDevice> build_catalog(const std::vector<DeviceInfo>& i
     for (const auto& d : infos) out.push_back(from_device_info(d));
     for (const auto& d : mscs) out.push_back(d);
     for (const auto& c : coms) out.push_back(serial_enum::make_device(c));
+    ustlog::logger("discovery")->info(
+        "目录组装完成：USB/HID {} 行 + MSC {} 行 + COM {} 行 = {} 行",
+        infos.size(), mscs.size(), coms.size(), out.size());
     return out;
 }
 
 // 目录条目 → 会话通道：四种通道即刻可建；打开成败（如 usb 行对应设备未绑
 // WinUSB 驱动）由通道 open 的 err 呈现，工厂层不预判。
 inline std::unique_ptr<IChannel> make_channel(const ConsoleDevice& d) {
+    ustlog::logger("discovery")->log(spdlog::level::debug, "创建通道：{} {}",
+                                     ustlog::w2u(d.kind_text()), ustlog::w2u(d.path));
     switch (d.kind) {
         case DeviceKind::hid:    return std::make_unique<HidChannel>(d.path);
         case DeviceKind::serial: return std::make_unique<SerialChannel>(d.path);
         case DeviceKind::usb:    return std::make_unique<WinUsbChannel>(d.path);
         case DeviceKind::msc:    return std::make_unique<MscChannel>(d.path);
-        default:                 return nullptr;
+        default:
+            ustlog::logger("discovery")->warn("创建通道失败：未知协议 kind 掩码 {:#x}",
+                                              unsigned(d.kind));
+            return nullptr;
     }
 }
 

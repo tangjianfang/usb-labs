@@ -10,9 +10,12 @@
 // 显示行由 SessionCore::frame_line 统一生成（视图旗标持于此处）。清屏是纯
 // UI 动作（清空编辑框、游标不动），后续 poll 只出新帧——不在此建模。
 // 纯逻辑无 Win32 依赖：S3 接收区与产测报告共用同一视图口径。
+// 日志：session.view（info=暂停/恢复滚动，debug=渲染游标增量与全量重渲染；
+// poll 空转（无增量无淘汰）与暂停轮询不打日志）。
 #pragma once
 
 #include "session/session_core.h"
+#include "app/log.h"
 
 #include <string>
 #include <vector>
@@ -26,7 +29,11 @@ public:
     bool parsed_view = false;    // §4.7 原始|解析切换（false=原始；解析正文走 parser）
     parser_select::PaneParser parser;   // 解析器选型（面板按通道描述填，选型跟随协议）
 
-    void set_paused(bool paused) noexcept { m_paused = paused; }
+    void set_paused(bool paused) noexcept {
+        if (m_paused != paused)   // 状态跃迁才留痕（重复置位不打）
+            ustlog::logger("session.view")->info("接收区滚动{}", paused ? "暂停" : "恢复");
+        m_paused = paused;
+    }
     bool paused() const noexcept { return m_paused; }
     unsigned long long rendered() const noexcept { return m_cursor; }   // 已渲染帧数
 
@@ -37,11 +44,16 @@ public:
         const unsigned long long total = j.tx_frames() + j.rx_frames();
         const auto& alive = j.frames();
         const unsigned long long first = total - alive.size();   // 存活首帧绝对序
+        const unsigned long long cursor0 = m_cursor;             // 本轮起始游标（留痕用）
         std::vector<std::wstring> out;
         for (unsigned long long a = (m_cursor > first ? m_cursor : first); a < total; ++a)
             out.push_back(s.frame_line(alive[static_cast<size_t>(a - first)], hex_view,
                                        absolute_ts, active_parser()));
         m_cursor = total;
+        if (!out.empty() || first > cursor0)   // 空转不打（UI 定时器逐轮 poll）
+            ustlog::logger("session.view")->debug("渲染增量 {} 行，游标 {}→{}（淘汰跳过 {} 帧）",
+                                                  out.size(), cursor0, m_cursor,
+                                                  first > cursor0 ? first - cursor0 : 0);
         return out;
     }
 
@@ -54,6 +66,9 @@ public:
         for (const auto& f : j.frames())
             out.push_back(s.frame_line(f, hex_view, absolute_ts, active_parser()));
         m_cursor = j.tx_frames() + j.rx_frames();
+        ustlog::logger("session.view")->debug(
+            "全量重渲染 {} 行（hex={} 绝对时间戳={} 解析={}），游标→{}", out.size(), hex_view,
+            absolute_ts, parsed_view, m_cursor);
         return out;
     }
 

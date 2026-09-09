@@ -2,6 +2,7 @@
 // 注册表 HKLM\HARDWARE\DEVICEMAP\SERIALCOMM 的每个值即一个串口（值名 =
 // \Device\VCP0 形式的内核对象名，值数据 = "COM7"）——设备管理器同口径，
 // 无 USB 设备也能离线运行。COM 名按数字排序（COM2 < COM10）。
+// 日志：discovery（info=扫描开始/结束+计数，debug=逐端口枚举，err=注册表失败带 rc）。
 #pragma once
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -17,6 +18,7 @@
 #include <vector>
 
 #include "discovery/device_catalog.h"
+#include "app/log.h"
 
 namespace serial_enum {
 
@@ -45,10 +47,17 @@ inline bool com_name_less(const std::wstring& a, const std::wstring& b) {
 // （本机无串口，不算错误）；其他打开失败写入 err。
 inline std::vector<std::wstring> scan(std::wstring* err = nullptr) {
     std::vector<std::wstring> out;
+    const ULONGLONG t0 = ::GetTickCount64();
+    ustlog::logger("discovery")->info("开始扫描 COM 口（注册表 SERIALCOMM）");
     HKEY h = nullptr;
     LSTATUS rc = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DEVICEMAP\\SERIALCOMM",
                                0, KEY_READ, &h);
     if (rc != ERROR_SUCCESS) {
+        if (rc == ERROR_FILE_NOT_FOUND)
+            ustlog::logger("discovery")->info("串口扫描：SERIALCOMM 键不存在，本机无串口（0 个）");
+        else
+            ustlog::logger("discovery")->error(
+                "串口扫描失败：RegOpenKeyExW(SERIALCOMM) rc=0x{:08X}", static_cast<unsigned long>(rc));
         if (rc != ERROR_FILE_NOT_FOUND && err)
             *err = L"RegOpenKeyExW(SERIALCOMM) 失败: " + std::to_wstring(rc);
         return out;
@@ -66,10 +75,16 @@ inline std::vector<std::wstring> scan(std::wstring* err = nullptr) {
         size_t n = data_len / sizeof(wchar_t);
         if (n > 0 && s[n - 1] == L'\0') --n; // 值数据带/不带终止符两种写法都兼容
         std::wstring com(s, n);
-        if (com_number(com) != 0) out.push_back(std::move(com));
+        if (com_number(com) != 0) {
+            ustlog::logger("discovery")->log(spdlog::level::debug, "枚举到串口：{} = {}",
+                                             ustlog::w2u(vname), ustlog::w2u(com));
+            out.push_back(std::move(com));
+        }
     }
     RegCloseKey(h);
     std::sort(out.begin(), out.end(), com_name_less);
+    ustlog::logger("discovery")->info("串口扫描完成：{} 个 COM 口（{} ms）", out.size(),
+                                      ::GetTickCount64() - t0);
     return out;
 }
 

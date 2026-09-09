@@ -6,11 +6,13 @@
 // 帧 → 解析文本统一入口（mouse 格式按剥离 Report ID 后的报告长度猜，
 // guess_mouse_format）。纯逻辑无 Win32 依赖：session_view 的解析视图分支
 // 与 UI 面板共用同一选型，UI 只做开关与重渲染。
+// 日志：parser.hid（info=通道解析器选型，debug=逐帧解析派发与鼠标格式猜测）。
 #pragma once
 
 #include "channel/channel.h"
 #include "parser/hid_parser.h"
 #include "session/session_codec.h"
+#include "app/log.h"
 
 #include <string>
 
@@ -48,11 +50,17 @@ inline PaneParser for_channel(const ChannelDesc& d) {
     } else if (d.kind == L"serial" || d.kind == L"loopback") {
         p.kind = PaneParser::Kind::ascii;                 // AsciiParser（默认文本视图）
     }
+    ustlog::logger("parser.hid")->info(
+        "解析器选型：通道 kind={} usage_page=0x{:04X} usage=0x{:04X} → {}（report_id={}）",
+        ustlog::w2u(d.kind), d.hid_usage_page, d.hid_usage, ustlog::w2u(p.name()),
+        p.has_report_id);
     return p;
 }
 
 // 帧 → 解析文本（设计 §3 IParser 派发）。none → 空串（调用方回退原始视图）。
 inline std::wstring parse_frame(const ChannelFrame& f, const PaneParser& p) {
+    ustlog::logger("parser.hid")->log(spdlog::level::debug, "帧解析派发 {} {}B（report_id={}）",
+                                      ustlog::w2u(p.name()), f.bytes.size(), p.has_report_id);
     switch (p.kind) {
         case PaneParser::Kind::hid_keyboard:
             return hid_parser::parse_hid_report(f.bytes, hid_parser::HidKind::keyboard,
@@ -61,9 +69,11 @@ inline std::wstring parse_frame(const ChannelFrame& f, const PaneParser& p) {
             // 报告格式按剥离 Report ID 后的长度猜（boot/boot+滚轮/宽轴）
             size_t n = f.bytes.size();
             if (p.has_report_id && n > 0) --n;
+            const hid_parser::MouseFormat mf = hid_parser::guess_mouse_format(n);
+            ustlog::logger("parser.hid")->debug("鼠标格式猜测 {}B → x{}B/y{}B 滚轮={}", n,
+                                                mf.x_bytes, mf.y_bytes, mf.wheel);
             return hid_parser::parse_hid_report(f.bytes, hid_parser::HidKind::mouse,
-                                                p.has_report_id,
-                                                hid_parser::guess_mouse_format(n));
+                                                p.has_report_id, mf);
         }
         case PaneParser::Kind::hid_consumer:
             return hid_parser::parse_hid_report(f.bytes, hid_parser::HidKind::consumer,

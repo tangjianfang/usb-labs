@@ -6,6 +6,7 @@
 #pragma once
 
 #include "framework/win32_rai.h"
+#include "app/log.h"
 
 #include <ntddscsi.h>   // SCSI_IOCTL_DATA_*（容量探测内核模板用）
 
@@ -107,6 +108,8 @@ inline uint8_t msc_read_cdb(unsigned long long lba, unsigned blocks, uint8_t (&c
         cdb[8] = static_cast<uint8_t>(blocks & 0xFF);
         cdb[9] = 0;
         *cdb_len = 10;
+        ustlog::logger("channel.msc")->log(spdlog::level::debug,
+            "READ 选路：READ(10) LBA{} blocks{}", lba, blocks);
         return 0x28;
     }
     cdb[0] = 0x88;   // READ(16)：LBA 大端 [2..9]，传输块数大端 [12..13]，CONTROL [15]
@@ -117,6 +120,8 @@ inline uint8_t msc_read_cdb(unsigned long long lba, unsigned blocks, uint8_t (&c
     cdb[13] = static_cast<uint8_t>(blocks & 0xFF);
     cdb[14] = cdb[15] = 0;
     *cdb_len = 16;
+    ustlog::logger("channel.msc")->log(spdlog::level::debug,
+        "READ 选路：READ(16)（高 LBA）LBA{} blocks{}", lba, blocks);
     return 0x88;
 }
 
@@ -155,27 +160,37 @@ bool msc_capacity_probe_impl(PortT& port, unsigned long long* total_sectors,
     if (last_lba != 0xFFFFFFFFull) {              // ≤2TB：10 字节容量即可表达
         if (blk == 0) {
             if (err) *err = L"READ_CAPACITY(10) 返回块大小 0";
+            ustlog::logger("channel.msc")->error("READ_CAPACITY(10) 块大小 0");
             return false;
         }
         if (total_sectors) *total_sectors = last_lba + 1;
         if (block_size) *block_size = blk;
+        ustlog::logger("channel.msc")->log(spdlog::level::debug,
+            "READ_CAPACITY(10)：{} 扇区 × {}B", last_lba + 1, blk);
         return true;
     }
     // 哨兵 = 容量（或精确扇区数）超出 10 字节表达范围 → READ_CAPACITY(16)
+    ustlog::logger("channel.msc")->log(spdlog::level::info,
+        "READ_CAPACITY(10) 返回 0xFFFFFFFF 哨兵（≥2TB），升级 READ_CAPACITY(16)");
     uint8_t cdb16[16] = {0x9E, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0};
     if (!port.pass_through(cdb16, sizeof(cdb16), data, 32, sense, &status,
                            SCSI_IOCTL_DATA_IN, timeout_s, err)) {
         if (err) *err = L"READ_CAPACITY(16)（>2TB）: " + *err;
+        ustlog::logger("channel.msc")->error("READ_CAPACITY(16) 失败：{}",
+                                             ustlog::w2u(*err));
         return false;
     }
     unsigned long long last16 = msc_detail::be64(data);
     blk = static_cast<unsigned>(msc_detail::be32(data + 8));
     if (blk == 0) {
         if (err) *err = L"READ_CAPACITY(16) 返回块大小 0";
+        ustlog::logger("channel.msc")->error("READ_CAPACITY(16) 块大小 0");
         return false;
     }
     if (total_sectors) *total_sectors = last16 + 1;
     if (block_size) *block_size = blk;
+    ustlog::logger("channel.msc")->log(spdlog::level::debug,
+        "READ_CAPACITY(16)：{} 扇区 × {}B", last16 + 1, blk);
     return true;
 }
 
