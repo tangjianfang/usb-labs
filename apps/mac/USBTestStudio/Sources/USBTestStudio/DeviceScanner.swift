@@ -17,6 +17,11 @@
 //    · IORegistryEntryGetPath 的缓冲类型 io_name_t 是 C 定长数组（char[128]），
 //      Swift 侧用 [CChar] 传入；若签名不匹配，改用 withUnsafeMutableBytes 绑定。
 //
+//  T7 首切片（本切片未编译验证，需 macOS，按 Swift 5.9 口径编写）新增：
+//    filtered(_:by:) 发现过滤纯函数（EP-4 设计 §二 设备发现区 / §四.1 即时过滤）。
+//    说明：本文件 scan() 是真实 IOKit 枚举实现（非 TODO/桩），过滤层直接作用于真实
+//    枚举结果；纯函数无 UI 类型、无副作用，对任意 [USBDeviceInfo]（含桩数据）同样可跑。
+//
 
 import Foundation
 import IOKit
@@ -123,6 +128,26 @@ enum DeviceScanner {
         if let p = pid, Int(info.pid) != p { return false }
         if let prefix = namePrefix, !prefix.isEmpty, !info.name.hasPrefix(prefix) { return false }
         return true
+    }
+
+    // MARK: 发现过滤（T7 首切片，EP-4 设计 §二/§四.1）
+
+    /// 即时过滤纯函数：大小写不敏感子串匹配 VID:PID（"1234:0002"，另含 "12340002"
+    /// 紧凑十六进制形，方便只输 VID 段）/ 产品名 / IORegistry 路径；多关键词空格分隔 =
+    /// AND（与 EP-4 设计 §四.1 口径一致，如 "1234 key"）。query 为空/纯空白 → 原样返回。
+    /// 无副作用，可对任意 [USBDeviceInfo]（含桩数据）独立验证。
+    static func filtered(_ devices: [USBDeviceInfo], by query: String) -> [USBDeviceInfo] {
+        let tokens = query.split(whereSeparator: { $0.isWhitespace }).map { $0.lowercased() }
+        guard !tokens.isEmpty else { return devices }
+        return devices.filter { d in
+            let haystacks = [
+                d.name.lowercased(),
+                d.vidPidText.lowercased(),
+                String(format: "%04x%04x", d.vid, d.pid),   // 紧凑形："12340002"
+                d.path.lowercased()
+            ]
+            return tokens.allSatisfy { token in haystacks.contains { $0.contains(token) } }
+        }
     }
 
     // MARK: 私有工具

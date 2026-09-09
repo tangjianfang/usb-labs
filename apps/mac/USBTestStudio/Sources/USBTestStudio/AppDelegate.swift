@@ -5,6 +5,13 @@
 //  职责（方案 §2 分层规则）：只做控件装配与事件渲染，禁止阻塞 I/O；
 //  TestEngine 委托回调到达时一律 DispatchQueue.main 转发后更新控件。
 //
+//  T7 首切片（本切片未编译验证，需 macOS，按 Swift 5.9 / AppKit 口径编写）新增：
+//    · 文件日志：UTSLog（见 Log.swift）打点启动/窗口创建/报告目录/扫描完成/退出
+//      （info，级别语义对齐 Windows C++ 规范）；
+//    · 设备发现过滤：设备表上方 NSSearchField 即时过滤（EP-4 设计 §二/§四.1），
+//      大小写不敏感匹配 VID:PID/产品名/路径；状态栏显示 "N/M 台"；
+//      关键词变化 debug、命中数 info（component: "discovery"）。
+//
 //  人性化清单（方案 §6）：
 //    · 原生 NSWindow / NSTableView / NSTextView / NSProgressIndicator + 自动布局；
 //    · 快捷键：F5 扫描、⌘R 运行（对应 Windows Ctrl+R）、⌘S 导出、⌘O 打开计划、⌘. 停止；
@@ -37,6 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let engine = TestEngine()
     private var devices: [USBDeviceInfo] = []
+    // T7 首切片：发现过滤状态（filteredDevices 才是表格数据源；filterQuery 跨扫描保留）
+    private var filteredDevices: [USBDeviceInfo] = []
+    private var filterQuery = ""
+    private var filterField: NSSearchField!
+    private var filterDebounce: DispatchWorkItem?
     private var currentPlan: TestPlan?
     private var currentPlanURL: URL?
     private var lastReport: TestReport?
@@ -50,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: 生命周期
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UTSLog.info("应用启动: USBTestStudio v\(ReportWriter.toolVersion)（macOS / AppKit）")
         engine.delegate = self
         buildUI()
         buildMainMenu()
@@ -57,11 +70,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         log("USBTestStudio v\(ReportWriter.toolVersion) 就绪（macOS 原生产测上位机）")
         log("流程：打开计划(⌘O) → 扫描设备(F5) → 运行测试(⌘R) → 导出报告(⌘S)")
         log("报告目录: \(engine.reportDirectory)")
+        UTSLog.info("报告目录: \(engine.reportDirectory)")
         log("提示: HID 回报率测量要求固件持续上报（如移动鼠标轴/使能 sensor 流）")
         scanDevices(self)   // 启动即扫一次
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        UTSLog.info("应用退出")   // T7 首切片：生命周期收尾打点
+    }
 
     // MARK: UI 装配
 
@@ -94,6 +112,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         topBar.spacing = 10
         topBar.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(topBar)
+
+        // ── 设备过滤（T7 首切片，EP-4 设计 §二 设备发现区）────────────────
+        // EN_CHANGE 等价：controlTextDidChange 逐键回调 + 500ms 防抖（见文件末 extension）；
+        // 回车确认 / ✕ 清空走 target/action，绕过防抖立即生效。
+        filterField = NSSearchField()
+        filterField.placeholderString = "过滤设备：VID:PID / 产品名 / 路径（空格分隔多关键词）"
+        filterField.target = self
+        filterField.action = #selector(filterFieldAction(_:))
+        filterField.delegate = self
+        filterField.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(filterField)
 
         // ── 设备表 ─────────────────────────────────────────────────
         tableView = NSTableView()
@@ -167,7 +196,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             topBar.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
             topBar.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -m),
 
-            tableScroll.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 10),
+            // T7 首切片：过滤框位于按钮条与设备表之间（列表上方）
+            filterField.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 10),
+            filterField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
+            filterField.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
+
+            tableScroll.topAnchor.constraint(equalTo: filterField.bottomAnchor, constant: 8),
             tableScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: m),
             tableScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -m),
             tableScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
@@ -196,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(tableView)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        UTSLog.info("主窗口已创建（初始 1060×680，最小 900×600）")
     }
 
     /// 应用主菜单（裸 NSApplication 无默认菜单；⌘Q/编辑菜单必须自建才可用）。
@@ -300,13 +335,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyScanResult(_ list: [USBDeviceInfo]) {
         devices = list
-        tableView.reloadData()
-        setStatus("共 \(list.count) 台 USB 设备")
-        log("扫描完成: \(list.count) 台设备")
+        applyFilter(query: filterQuery)   // 重扫后按当前关键词重新收敛（保留过滤状态）
+        UTSLog.info("扫描完成: \(list.count) 台 USB 设备", component: "discovery")
         for d in list {
             let sn = d.serialNumber.isEmpty ? "-" : d.serialNumber
             log("  · \(d.name) [\(d.vidPidText)] \(d.speedLabel) sn=\(sn)")
         }
+    }
+
+    // MARK: 发现过滤（T7 首切片）
+
+    /// 重算过滤结果并渲染（调用方保证主线程）。
+    /// 状态栏口径：无关键词 → "共 N 台"；有关键词 → "显示 N/M 台（过滤: …）"。
+    private func applyFilter(query: String) {
+        filterQuery = query
+        filteredDevices = DeviceScanner.filtered(devices, by: query)
+        tableView.reloadData()
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            setStatus(devices.isEmpty ? "空闲" : "共 \(devices.count) 台 USB 设备")
+        } else {
+            setStatus("显示 \(filteredDevices.count)/\(devices.count) 台（过滤: \"\(trimmed)\"）")
+            // 命中数 info（空关键词不重复打点：扫描完成 info 已含总台数）
+            UTSLog.info("过滤命中 \(filteredDevices.count)/\(devices.count) 台（关键词: \"\(trimmed)\"）",
+                        component: "discovery")
+        }
+    }
+
+    /// 回车确认 / ✕ 清空：绕过防抖立即生效。
+    @objc func filterFieldAction(_ sender: NSSearchField) {
+        filterDebounce?.cancel()
+        applyFilter(query: sender.stringValue)
     }
 
     @objc func runTests(_ sender: Any?) {
@@ -406,16 +465,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hex4(_ v: Int) -> String { String(format: "0x%04X", v) }
 }
 
-// MARK: - 设备表数据源/委托（cell-based，结构简单可审计）
+// MARK: - 设备表数据源/委托（cell-based，结构简单可审计；T7 首切片起数据源为 filteredDevices）
 
 extension AppDelegate: NSTableViewDataSource, NSTableViewDelegate {
 
-    func numberOfRows(in tableView: NSTableView) -> Int { devices.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { filteredDevices.count }
 
     func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?,
                    row: Int) -> Any? {
-        guard row >= 0, row < devices.count else { return nil }
-        let d = devices[row]
+        guard row >= 0, row < filteredDevices.count else { return nil }
+        let d = filteredDevices[row]
         switch tableColumn?.identifier.rawValue {
         case "name":   return d.name
         case "vidpid": return d.vidPidText
@@ -428,10 +487,26 @@ extension AppDelegate: NSTableViewDataSource, NSTableViewDelegate {
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         let row = tableView.selectedRow
-        guard row >= 0, row < devices.count else { return }
-        let d = devices[row]
+        guard row >= 0, row < filteredDevices.count else { return }
+        let d = filteredDevices[row]
         log("选中行 \(row): \(d.name) [\(d.vidPidText)] \(d.path)")
         log("提示: 引擎按计划 device 字段(vid/pid/name_prefix)自动匹配 DUT，表格选中仅用于查看")
+    }
+}
+
+// MARK: - 发现过滤委托（T7 首切片）：controlTextDidChange = Windows EN_CHANGE 等价
+
+extension AppDelegate: NSControlTextEditingDelegate {
+
+    /// 逐键回调：debug 留痕（逐操作语义）+ 500ms 防抖后应用（快速输入只应用最后一次）。
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as? NSSearchField) === filterField else { return }
+        let query = filterField.stringValue
+        UTSLog.debug("过滤关键词变化: \"\(query)\"", component: "discovery")
+        filterDebounce?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.applyFilter(query: query) }
+        filterDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 }
 

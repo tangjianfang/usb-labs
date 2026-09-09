@@ -26,9 +26,10 @@ swift run              # 直接启动 GUI
 
 ```
 Sources/USBTestStudio/
-├── main.swift          入口：裸 NSApplication + AppDelegate 装配
-├── AppDelegate.swift   UI 层：窗口/表格/日志/进度/快捷键/菜单（引擎回调经 main 队列渲染）
-├── DeviceScanner.swift 设备访问层：IOKit 枚举 IOUSBHostDevice → [USBDeviceInfo]
+├── main.swift          入口：裸 NSApplication + AppDelegate 装配 + UTSLog 初始化
+├── Log.swift           日志层：UTSLog 文件日志（T7 首切片，对齐 Windows spdlog 规范）
+├── AppDelegate.swift   UI 层：窗口/发现过滤/表格/日志/进度/快捷键/菜单（引擎回调经 main 队列渲染）
+├── DeviceScanner.swift 设备访问层：IOKit 枚举 IOUSBHostDevice → [USBDeviceInfo] + 发现过滤纯函数
 ├── HIDTester.swift     设备访问层：IOHIDManager 回报率直方图 / setReport / 报告环回
 ├── SerialTester.swift  设备访问层：/dev/tty.usbmodem* 枚举 + FileHandle 环回 + PD 遥测
 ├── TestEngine.swift    引擎层：TestPlan(Codable) 解析 → 步骤执行/判定 → TestReport
@@ -161,6 +162,8 @@ python -c "import yaml,json,sys;json.dump(yaml.safe_load(open(sys.argv[1],encodi
 ## 8. 真机联调步骤
 
 1. **枚举**：插上 DUT，F5 扫描；表格应出现 DUT 行（名称/VID:PID/速度/序列号/注册表路径）。
+   设备多时可在表格上方搜索框输关键词即时过滤（VID:PID / 产品名 / 路径，空格分隔 = AND，
+   不区分大小写），状态栏显示 `显示 N/M 台`。
 2. **回报率**：打开 lab1 JSON → ⌘R。hid_polling_rate 期间**持续移动滚轮/轴**（固件上报流必须
    活跃），观察 `hz` 与直方图；`min_hz: 900` 需固件端点轮询 ≥1kHz 且主机侧稳定。
 3. **LED/环回**：hid_output_write 观察板上 LED；hid_report_loopback 需工装固件把输出报告回显到
@@ -193,3 +196,39 @@ python -c "import yaml,json,sys;json.dump(yaml.safe_load(open(sys.argv[1],encodi
 `IOHIDDeviceRegisterInputReportCallback` 回调形参、`kIOHIDReportTypeOutput` 导入形式、
 `IOHIDDeviceSetReport` 的 reportID=0 语义、`VMIN/VTIME` 常量导入、`kIOMasterPortDefault`
 弃用别名（macOS 12+ 为 `kIOMainPortDefault`）。编译若报签名不匹配，按注释给出的备选写法调整。
+
+## 11. T7 首切片：文件日志 + 设备发现过滤
+
+对齐 Windows 版 EP-4 S2「设备发现」的工程师体验核心
+（`apps/win/USBTestStudio/src/app/log.h` 日志规范、`apps/设计-工程师通信控制台.md`
+§二 设备发现区 / §四.1 即时过滤）。
+
+| 能力 | 状态 |
+|---|---|
+| 文件日志（UTSLog） | ✓ 首切片 |
+| 设备发现过滤（搜索框即时过滤） | ✓ 首切片 |
+| EP-4 三区布局 / 多会话标签 / 收发台（S3 会话台） | 未移植 |
+
+**文件日志**（`Sources/Log.swift`，`enum UTSLog`）：
+
+* 落盘 `~/Library/Logs/USBTestStudio/app.log`（追加写；简单大小检查，超 5MB 轮转 `app.log.1`，保留一代）；
+* 行格式 `[yyyy-MM-dd HH:MM:SS.mmm][LEVEL][component] message`，与 Windows spdlog 规范一致
+  （Windows 版模块段后另有线程段 `[T%t]`，本切片按 T7 口径省略）；
+* 级别语义同 C++：trace=逐包 · debug=逐操作 · info=生命周期 · warn=可恢复 · err=失败；
+* 级别开关：环境变量 `USBTS_LOG_LEVEL=trace|debug|info|warn|err`（兼容 warning/error），缺省 info；
+  warn 及以上写后立即 fsync（对应 C++ `flush_on(warn)`）；
+* 线程安全：写路径收敛到串行 DispatchQueue；另镜像写 stderr（`swift run` 终端 / Console.app 可见，
+  对应 Windows OutputDebugString 靶）；日志失败静默降级，不拖死业务。
+
+**设备发现过滤**（`AppDelegate` 过滤框 + `DeviceScanner.filtered(_:by:)` 纯函数）：
+
+* 设备表上方 `NSSearchField`：逐键即时过滤（`controlTextDidChange`，EN_CHANGE 等价）+ 500ms 防抖；
+  回车 / ✕ 清空绕过防抖立即生效；
+* 大小写不敏感子串匹配 VID:PID（含 `12340002` 紧凑十六进制形）/ 产品名 / IORegistry 路径；
+  多关键词空格分隔 = AND（设计 §四.1）；
+* 状态栏显示 `显示 N/M 台`；关键词变化 debug 留痕、命中数 info（component: `discovery`）；
+* 过滤层为数据层纯函数，作用于真实 IOKit 枚举结果（`scan()` 非 TODO/桩），对桩数据同样可跑。
+
+> ⚠ 本切片代码**未编译验证**（开发机无 macOS 工具链），按 Swift 5.9 / AppKit 口径编写；
+> 涉及文件（main / AppDelegate / DeviceScanner / Log.swift）头部注释有同样标注，
+> `swift build` 若报签名不匹配，按 README §10 与各文件注释的备选写法调整。
