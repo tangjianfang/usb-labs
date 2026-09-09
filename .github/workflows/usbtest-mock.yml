@@ -31,3 +31,28 @@ jobs:
         run: python simulator/tests/test_sim.py
       - name: 轻量校验（链接/围栏）
         run: bash tools/validate.sh
+
+  msvc-build:
+    # T13：Windows 原生上位机（Win32/C++20 + spdlog）在 CI 上真实编译，
+    # 防止"只在本地能编"的回归；产物随 artifact 上传 7 天供人工冒烟。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 配置（VS 2022 生成器 x64）
+        run: cmake -S apps/win/USBTestStudio -B apps/win/build -G "Visual Studio 17 2022" -A x64
+      - name: 编译五靶（主程序+四离线自测）
+        run: cmake --build apps/win/build --config Release
+      - name: 通道层离线自测（226 例）
+        run: ./apps/win/build/Release/channel_selftest.exe
+      - name: 设备发现离线自测
+        run: ./apps/win/build/Release/discovery_selftest.exe
+      - name: 会话台离线自测
+        run: ./apps/win/build/Release/session_selftest.exe
+      - name: 解析面板离线自测（含 S6 PD 遥测）
+        run: ./apps/win/build/Release/parser_selftest.exe
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: USBTestStudio-win-x64
+          path: apps/win/build/Release/USBTestStudio.exe
+          retention-days: 7
