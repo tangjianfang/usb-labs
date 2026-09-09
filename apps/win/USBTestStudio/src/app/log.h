@@ -106,6 +106,17 @@ inline void init(bool also_stdout = false, const wchar_t* file_base = L"usts") {
         root->flush_on(spdlog::level::warn);
         spdlog::register_logger(root);
         spdlog::set_default_logger(root);
+
+        // 静态初始化时序修补：.cpp 匿名空间的模块 logger 在本 init 之前创建，
+        // 只捕获到默认 stdout sink——统一补挂文件/调试 sink 与级别格式，
+        // 保证任何取 logger 的时序（静态或运行期）最终都进同一套输出。
+        spdlog::apply_all([&](const std::shared_ptr<spdlog::logger>& lg) {
+            if (!lg || lg->name() == root->name()) return;
+            lg->sinks() = sinks;
+            lg->set_level(level);
+            lg->set_pattern("[%Y-%m-%d %H:%M:%S.%e][%^%l%$][%n][T%t] %v");
+            lg->flush_on(spdlog::level::warn);
+        });
     });
 }
 
