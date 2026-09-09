@@ -131,7 +131,24 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 ```
 扫描在独立的短生命周期线程执行（SetupDi 枚举 + PostMessage 回窗）。UI 侧在 `WM_APP+2/3` 中以 `unique_ptr` 接管并释放 payload。
 
-## 7. 已知限制
+## 7. 日志规范（spdlog）
+
+全库统一经 `src/app/log.h` 门面输出（vendored spdlog v1.14.1，`third_party/spdlog/`）：
+
+- **格式**：`[yyyy-MM-dd HH:MM:SS.mmm][级别][模块][线程] 消息`（UTF-8）
+- **模块命名**：app / ui.console / ui.session / ui.main / discovery / channel.serial |
+  channel.hid | channel.usb | channel.msc / session.core | session.codec | session.view /
+  parser.hid | parser.pd / engine / framework
+- **级别语义**：trace=逐字节/逐包（配 to_hex）· debug=逐操作（参数+结果+耗时）·
+  info=生命周期 · warn=可恢复异常（超时/回退）· err=失败（必带 GetLastError/HRESULT 十六进制）
+- **sink**：滚动文件 `%LOCALAPPDATA%\USBTestStudio\logs\usts.log`（5MB×3）+
+  OutputDebugString（GUI 无控制台也可见）；selftest 靶另接 stdout
+- **级别开关**：环境变量 `USBTS_LOG_LEVEL=trace|debug|info|warn|err|off`（默认 info）；warn 及以上即刷盘
+- Python 侧（tools/usbtest、simulator/usbsim）经 `logbase.py` 对齐同一格式与级别语义
+
+## 8. 已知限制
+
+
 
 1. **未真机运行**——工程保持 MSVC 五靶编译绿（#64 起零告警，纯逻辑自测离线可跑），但设备访问层未经真机联调；首次真机联调预计需按下方不确定清单小幅修正。
 2. `msc_write_verify`（DESTRUCTIVE 写读校验）未实现；`line_coding`（WinUSB 控制传输）与 `dfu_verify`（外部工具）未实现，执行到即 FAIL。
@@ -141,7 +158,7 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 6. 启动时后台扫描线程若恰逢窗口销毁，存在一次小分配的理论泄漏（PostMessage 成功但消息未被处理）；量级为单设备列表，工程上可接受。
 7. ListView 列宽按 96dpi 基准写死，高 DPI 下未随 WM_DPICHANGED 重新按比例调整（仅窗口与字体缩放）。
 
-## 8. 不确定 API 清单（首次真机编译/联调需按 MSDN 复核）
+## 9. 不确定 API 清单（首次真机编译/联调需按 MSDN 复核）
 
 | # | API / 结构 | 用途 | 复核点 |
 |---|---|---|---|
@@ -168,7 +185,7 @@ UI（主线程）  MainWindow/LogView —— 只消费事件，零阻塞 I/O
 | 21 | MSC 会话 3s 默认直通超时（`SCSI_PASS_THROUGH_DIRECT.TimeOutValue`） | EP-4 MSC 会话 send/open 有界（evolve #72） | 3s 对慢速盘（螺旋 HDD 冷启动/大块 READ10）是否偏紧；超时后设备侧命令可能仍在执行——重发同命令的副作用边界（只读通道影响有限） |
 | 22 | `READ_CAPACITY(16)`（0x9E/SA=0x10）与 `READ(16)`（0x88） | EP-4 >2TB 盘支持（evolve #75） | USB-SATA/USB-桥接芯片对 16 字节 CDB 命令的支持差异（部分老桥只可靠支持 10 字节 CDB）；RC10 哨兵在精确 0xFFFFFFFF 扇区盘上的触发；验收表 D11 钉 |
 
-## 9. 文件结构
+## 10. 文件结构
 
 ```
 USBTestStudio/
