@@ -1,6 +1,9 @@
 """usbsim.device —— 设备模型: EP0 状态机 + 描述符 + HID/MSC/Hub 功能模型。"""
 from __future__ import annotations
 from . import packets as P
+from .logbase import setup
+
+log = setup("usbsim.device")
 
 GET_STATUS, CLEAR_FEATURE, SET_FEATURE = 0x00, 0x01, 0x03
 SET_ADDRESS, GET_DESCRIPTOR, SET_CONFIGURATION = 0x05, 0x06, 0x09
@@ -44,11 +47,18 @@ class UsbDevice:
     def _descriptor(self, wValue: int) -> bytes | None:
         dtype, idx = (wValue >> 8) & 0xFF, wValue & 0xFF   # 高字节=类型, 低字节=索引（§9.4.3）
         if dtype == DESC_DEVICE:
+            log.debug("返回描述符: type=DEVICE idx=%d len=%d", idx, len(self.device_desc))
             return self.device_desc
         if dtype == DESC_CONFIG:
+            log.debug("返回描述符: type=CONFIG idx=%d len=%d", idx, len(self.config_desc))
             return self.config_desc
         if dtype == DESC_STRING:
-            return self.strings.get(idx, "").encode("utf-16-le") if idx in self.strings else None
+            if idx in self.strings:
+                log.debug("返回描述符: type=STRING idx=%d len=%d", idx, len(self.strings[idx]) * 2)
+                return self.strings[idx].encode("utf-16-le")
+            log.debug("描述符不存在: type=STRING idx=%d → STALL", idx)
+            return None
+        log.debug("描述符不存在: type=0x%02X idx=%d → STALL", dtype, idx)
         return None
 
     def ep0_setup(self, packet: dict):
@@ -58,15 +68,19 @@ class UsbDevice:
         wValue, wIndex, wLength = (int.from_bytes(req[2:4], "little"),
                                    int.from_bytes(req[4:6], "little"),
                                    int.from_bytes(req[6:8], "little"))
+        log.debug("EP0 SETUP: type=0x%02X req=0x%02X wValue=0x%04X wIndex=0x%04X wLength=%d",
+                  bmRequestType, bRequest, wValue, wIndex, wLength)
         self._setup = {"type": bmRequestType, "req": bRequest,
                        "wValue": wValue, "wIndex": wIndex, "wLength": wLength}
         self._data_tx, self._data_rx = bytearray(), bytearray()
         if bRequest == SET_ADDRESS and self.state in ("Default", "Addressed"):
             self.address = wValue
             self.state = "Addressed"
+            log.debug("SET_ADDRESS → 地址 %d（Addressed 态）", wValue)
         elif bRequest == SET_CONFIGURATION:
             self.configuration = wValue
             self.state = "Configured" if wValue else "Addressed"
+            log.debug("SET_CONFIGURATION %d → %s 态", wValue, self.state)
         elif bRequest == GET_DESCRIPTOR and bmRequestType & 0x80:
             desc = self._descriptor(wValue)
             if desc is None:
@@ -97,6 +111,7 @@ class UsbDevice:
         return self.bulk_in_packet(ep)
 
     def bus_reset(self):
+        log.debug("总线复位: 地址 %d → 0, 回 Default 态", self.address)
         self.address, self.state, self.configuration = 0, "Default", 0
         self._setup = None
         for ep in self.endpoints.values():
@@ -191,6 +206,7 @@ class MscDevice(UsbDevice):
 
     def _scsi(self, cbd: bytes) -> tuple[bytes, int]:
         op = cbd[0]
+        log.debug("MSC SCSI 命令: op=0x%02X cdb=%s", op, cbd.hex())
         if op == 0x00:
             return b"", 0
         if op == 0x12:
@@ -213,6 +229,7 @@ class MscDevice(UsbDevice):
             n = int.from_bytes(cbd[10:14] if wide else cbd[7:9], "big")
             data = b"".join(bytes(self.disk.get(lba + i, b"\0" * 512)) for i in range(n))
             return data, 0
+        log.warning("MSC 未知 CDB op=0x%02X → CHECK CONDITION (status=0x01)", op)
         return b"", 0x01
 
 

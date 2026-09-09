@@ -4,6 +4,10 @@
 from __future__ import annotations
 import struct
 
+from .logbase import setup
+
+log = setup("usbsim.ble")
+
 ADV_IND = 0x00
 CONNECT_IND = 0x05
 
@@ -28,10 +32,12 @@ class GapPeripheral:
         self.connected = False
 
     def adv_payload(self) -> bytes:
+        log.debug("广播载荷: name=%r len=%d", self.name, 5 + len(self.name))
         return ad_structure(0x01, b"\x06") + ad_structure(0x09, self.name.encode())
 
     def connect(self):
         self.connected = True
+        log.info("外设 %r 连接建立", self.name)
 
 
 class GapCentral:
@@ -41,20 +47,27 @@ class GapCentral:
         self.discovered: dict[int, tuple[str, bytes]] = {}
 
     def scan(self, periph: GapPeripheral) -> bytes:
-        return periph.adv_payload()
+        adv = periph.adv_payload()
+        log.debug("扫描: 收到广播 name=%r", periph.name)
+        return adv
 
     def connect(self, periph: GapPeripheral):
         periph.connected = True
+        log.info("中心设备连接 %r", periph.name)
 
     def discover(self, periph: GapPeripheral):
         self.discovered = {h: (u, v) for h, (u, v, _) in periph.attributes.items()}
+        log.info("GATT 发现: %d 个属性（%r）", len(self.discovered), periph.name)
 
     def read(self, periph: GapPeripheral, handle: int) -> bytes:
+        log.debug("读取 handle=0x%04X", handle)
         return periph.attributes[handle][1]
 
     def subscribe(self, periph: GapPeripheral, handle: int, callback) -> bool:
         entry = periph.attributes.get(handle)
         if entry is None:
+            log.warning("订阅失败: handle=0x%04X 不存在（%r）", handle, periph.name)
             return False
         callback(entry[1])
+        log.debug("订阅 handle=0x%04X 成功", handle)
         return True

@@ -2,17 +2,30 @@
 依赖: pip install pyusb
 注意: write_verify 会破坏 DUT 数据，仅用于产线/授权测试（DESTRUCTIVE 标记）。
 """
+import functools
 import struct
 
 from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#76）
+from usbtest.logbase import setup
+
+log = setup("usbtest.msc")
+devlog = setup("usbtest.device")      # 设备 open/close 生命周期（规格模块 usbtest.device）
 
 HANDLERS = {}
 
 
 def handler(t):
     def deco(fn):
-        HANDLERS[t] = fn
-        return fn
+        @functools.wraps(fn)
+        def wrapped(ctx, step):
+            log.debug("处理器入口: %s", step.get("name", t))
+            r = fn(ctx, step)
+            log.debug("处理器出口: %s %s", r.name, "PASS" if r.passed else "FAIL")
+            if not r.passed and r.note:
+                log.warning("%s 失败原因: %s", r.name, r.note)
+            return r
+        HANDLERS[t] = wrapped
+        return wrapped
     return deco
 
 
@@ -21,6 +34,7 @@ def open_device(dev):
     d = usb.core.find(idVendor=dev.get("vid"), idProduct=dev.get("pid"))
     assert d is not None, "未发现 MSC 设备"
     d.set_configuration()
+    devlog.info("MSC 设备已打开: VID=0x%04X PID=0x%04X", dev.get("vid"), dev.get("pid"))
     return d
 
 
@@ -40,6 +54,7 @@ def _bulk_eps(d):
                 elif not (ep.bEndpointAddress & 0x80) and ep.bmAttributes & 2:
                     bo = ep.bEndpointAddress
     assert bo is not None and bi is not None, "未找到批量端点"
+    log.debug("批量端点过滤命中: OUT=0x%02X IN=0x%02X", bo, bi)
     return bo, bi
 
 
@@ -65,6 +80,8 @@ def _scsi(ctx, cbd, data_dir, data=b""):
     csw = bytes(d.read(bi, 13, 5000))
     assert csw[:4] == b"USBS" and struct.unpack("<I", csw[4:8])[0] == tag, "CSW 校验失败"
     status = csw[12]
+    if status:   # 非 0 即 CHECK CONDITION（SENSE 细节须 REQUEST SENSE，产线记状态字节）
+        log.warning("SCSI CHECK CONDITION: CDB op=0x%02X status=%d", cbd[0], status)
     return status, rx
 
 
@@ -94,12 +111,15 @@ def msc_capacity_probe(scsi):
     last, blk = struct.unpack(">II", rx[:8])
     if last != 0xFFFFFFFF:
         assert status == 0 and blk > 0, "READ_CAPACITY(10) 失败或块长 0"
+        log.info("容量探测: 扇区=%d 块长=%d（RC10, %.2f GB）", last + 1, blk, (last + 1) * blk / 1e9)
         return last + 1, blk
+    log.debug("READ_CAPACITY(10) 回 0xFFFFFFFF 哨兵（>2TB）→ 升级 READ_CAPACITY(16)")
     status, rx = scsi(bytes([0x9E, 0x10]) + b"\0" * 11 + bytes([32, 0, 0]), "IN", b"\0" * 32)
     assert status == 0 and len(rx) >= 12, "READ_CAPACITY(16)（>2TB）失败或短读"
     last = struct.unpack(">Q", rx[:8])[0]
     blk = struct.unpack(">I", rx[8:12])[0]
     assert blk > 0, "READ_CAPACITY(16) 返回块长 0"
+    log.info("容量探测: 扇区=%d 块长=%d（RC16, %.2f GB）", last + 1, blk, (last + 1) * blk / 1e9)
     return last + 1, blk
 
 
@@ -124,8 +144,12 @@ def msc_rw_cdb(op10, op16, lba, blocks):
     if not 0 < blocks <= 0xFFFFFFFF:
         raise ValueError(f"blocks {blocks} 超出传输长度 BE32 域（1..0xFFFFFFFF）")
     if lba + blocks <= 0x100000000 and blocks <= 0xFFFF:
+        log.debug("CDB 选路: op=0x%02X (10 字节) LBA=%d 块数=%d（32 位 LBA 与 16 位块数域内）",
+                  op10, lba, blocks)
         return (bytes([op10, 0]) + lba.to_bytes(4, "big") + b"\0" +
                 blocks.to_bytes(2, "big") + b"\0")
+    log.debug("CDB 选路: op=0x%02X (16 字节) LBA=%d 块数=%d（越过 32 位 LBA 或 16 位块数域）",
+              op16, lba, blocks)
     return bytes([op16, 0]) + lba.to_bytes(8, "big") + blocks.to_bytes(4, "big") + b"\0\0"
 
 

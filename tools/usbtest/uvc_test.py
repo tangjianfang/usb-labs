@@ -1,15 +1,29 @@
 """UVC 产测后端：格式/描述符核对（pyusb）+ 可选帧采集（OpenCV）。
 依赖: pip install pyusb；帧采集另需 opencv-python（可选）。
 """
+import functools
+
 from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+from usbtest.logbase import setup
+
+log = setup("usbtest.uvc")
+devlog = setup("usbtest.device")      # 设备 open/close 生命周期（规格模块 usbtest.device）
 
 HANDLERS = {}
 
 
 def handler(t):
     def deco(fn):
-        HANDLERS[t] = fn
-        return fn
+        @functools.wraps(fn)
+        def wrapped(ctx, step):
+            log.debug("处理器入口: %s", step.get("name", t))
+            r = fn(ctx, step)
+            log.debug("处理器出口: %s %s", r.name, "PASS" if r.passed else "FAIL")
+            if not r.passed and r.note:
+                log.warning("%s 失败原因: %s", r.name, r.note)
+            return r
+        HANDLERS[t] = wrapped
+        return wrapped
     return deco
 
 
@@ -18,6 +32,7 @@ def open_device(dev):
     d = usb.core.find(idVendor=dev.get("vid"), idProduct=dev.get("pid"))
     assert d is not None, "未发现 UVC 设备"
     d.set_configuration()
+    devlog.info("UVC 设备已打开: VID=0x%04X PID=0x%04X", dev.get("vid"), dev.get("pid"))
     return d
 
 
@@ -29,6 +44,7 @@ def _uvc_formats(d):
         for itf in cfg:
             if itf.bInterfaceClass == 0x0E:
                 found["uvc_itf"] += 1
+    log.debug("VC/VS 接口过滤命中 %d 个", found["uvc_itf"])
     return found
 
 

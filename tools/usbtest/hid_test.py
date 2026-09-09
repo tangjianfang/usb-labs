@@ -1,17 +1,30 @@
 """HID 产测后端：枚举、描述符、回报率、输出报告、环回。
 依赖: pip install hidapi pyusb （回报率用 hidapi；描述符用 pyusb）
 """
+import functools
 import time
 
 from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+from usbtest.logbase import setup
+
+log = setup("usbtest.hid")
+devlog = setup("usbtest.device")      # 设备 open/close 生命周期（规格模块 usbtest.device）
 
 HANDLERS = {}
 
 
 def handler(t):
     def deco(fn):
-        HANDLERS[t] = fn
-        return fn
+        @functools.wraps(fn)
+        def wrapped(ctx, step):
+            log.debug("处理器入口: %s", step.get("name", t))
+            r = fn(ctx, step)
+            log.debug("处理器出口: %s %s", r.name, "PASS" if r.passed else "FAIL")
+            if not r.passed and r.note:
+                log.warning("%s 失败原因: %s", r.name, r.note)
+            return r
+        HANDLERS[t] = wrapped
+        return wrapped
     return deco
 
 
@@ -21,6 +34,8 @@ def open_device(dev):
     assert infos, "未发现 HID 设备（检查 VID/PID 或权限）"
     d = hid.device()
     d.open_path(infos[0]["path"])   # 旧版返回未打开实例（_h 靠 is_opened 自愈掩盖，#77）
+    devlog.info("HID 设备已打开: VID=0x%04X PID=0x%04X（枚举命中 %d 接口，取首个）",
+                dev.get("vid"), dev.get("pid"), len(infos))
     return d
 
 
@@ -39,6 +54,7 @@ def _h(ctx):
 def enumerate_dut(ctx, step):
     import hid
     infos = hid.enumerate(ctx["device"].get("vid"), ctx["device"].get("pid"))
+    log.debug("枚举过滤命中 %d 个接口", len(infos))
     return StepResult(step.get("name", "枚举检测"), len(infos) > 0,
                       {"interfaces": len(infos)})
 

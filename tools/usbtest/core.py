@@ -7,6 +7,10 @@ import json
 import pathlib
 import sys
 
+from usbtest.logbase import setup
+
+log = setup("usbtest.engine")
+
 DEFAULT_STATION = "STN-01"
 
 
@@ -57,6 +61,8 @@ def load_plan(path: str) -> dict:
         sys.exit("缺少依赖: pip install pyyaml")
     plan = yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
     assert "device" in plan and "steps" in plan, "计划缺少 device/steps"
+    log.info("计划加载: %s（backend=%s, %d 步）",
+             plan.get("name", "未命名"), plan["device"].get("backend", "mock"), len(plan["steps"]))
     return plan
 
 
@@ -72,16 +78,27 @@ def run_plan(plan: dict, dut_sn: str, station: str, mock: bool) -> TestReport:
            # ble/dock 无 open_device（无设备句柄概念）——缺省 None 而非派发前 AttributeError（#77 复核 H1）
            "dev": None if mock else getattr(mod, "open_device", lambda d: None)(plan["device"])}
     rep = TestReport(plan, dut_sn, station)
+    log.info("开始执行: DUT=%s 工位=%s backend=%s", dut_sn, station, backend)
     for step in plan["steps"]:
         stype = step["type"]
         h = handlers.get(stype)
         if h is None:
+            log.warning("未知步骤类型 %s（步骤 %r 记 FAIL 继续）", stype, step.get("name", stype))
             rep.add(StepResult(step.get("name", stype), False, note=f"未知步骤类型 {stype}"))
             continue
+        log.debug("步骤开始: %s（处理器 %s）", step.get("name", stype), getattr(h, "__name__", repr(h)))
         try:
-            rep.add(h(ctx, step))
+            r = h(ctx, step)
+            log.debug("步骤结束: %s %s", r.name, "PASS" if r.passed else "FAIL")
+            rep.add(r)
         except Exception as e:  # 设备拔出/驱动异常不应中断整站流程
+            log.exception("步骤 %r 异常", step.get("name", stype))
             rep.add(StepResult(step.get("name", stype), False, note=f"异常: {e}"))
+    ok = sum(1 for x in rep.steps if x.passed)
+    elapsed = (datetime.datetime.now() - rep.started).total_seconds()
+    log.info("执行结束: %d/%d 通过 (%.1f%%)，判定 %s，耗时 %.3fs",
+             ok, len(rep.steps), (ok * 100.0 / len(rep.steps)) if rep.steps else 0.0,
+             "PASS" if rep.verdict else "FAIL", elapsed)
     return rep
 
 
@@ -93,6 +110,7 @@ def main(argv=None):
     ap.add_argument("--mock", action="store_true", help="无硬件模拟模式（CI/演示）")
     ap.add_argument("--report-dir", default="reports")
     a = ap.parse_args(argv)
+    setup("usbtest", logfile=None)   # CLI 入口根 logger（级别走 USBTS_LOG_LEVEL，默认 INFO）
     plan = load_plan(a.plan)
     rep = run_plan(plan, a.dut_sn, a.station, a.mock)
     rep.save_json(a.report_dir)

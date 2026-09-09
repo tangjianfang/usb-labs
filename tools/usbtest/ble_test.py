@@ -1,17 +1,29 @@
 """BLE 产测后端：扫描/连接/GATT 发现/HID 通知（经标准 BLE 适配器，bleak）。
 依赖: pip install bleak
 """
+import functools
 import time
 
 from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+from usbtest.logbase import setup
+
+log = setup("usbtest.ble")
 
 HANDLERS = {}
 
 
 def handler(t):
     def deco(fn):
-        HANDLERS[t] = fn
-        return fn
+        @functools.wraps(fn)
+        def wrapped(ctx, step):
+            log.debug("处理器入口: %s", step.get("name", t))
+            r = fn(ctx, step)
+            log.debug("处理器出口: %s %s", r.name, "PASS" if r.passed else "FAIL")
+            if not r.passed and r.note:
+                log.warning("%s 失败原因: %s", r.name, r.note)
+            return r
+        HANDLERS[t] = wrapped
+        return wrapped
     return deco
 
 
@@ -51,6 +63,7 @@ def scan_connect(ctx, step):
                     break
         if target is None:
             return None, False, {}
+        log.debug("广播命中: %s（%.1fs）", target.name, time.perf_counter() - t0)
         async with BleakClient(target) as c:
             return target, c.is_connected, {"mtu": c.mtu_size}
 

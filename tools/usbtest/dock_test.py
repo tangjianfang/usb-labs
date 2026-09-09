@@ -1,15 +1,27 @@
 """扩展坞产测后端：拓扑核对（hub 层级/billboard/每口枚举）——经 OS USB 树。"""
+import functools
 import subprocess
 
 from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+from usbtest.logbase import setup
+
+log = setup("usbtest.dock")
 
 HANDLERS = {}
 
 
 def handler(t):
     def deco(fn):
-        HANDLERS[t] = fn
-        return fn
+        @functools.wraps(fn)
+        def wrapped(ctx, step):
+            log.debug("处理器入口: %s", step.get("name", t))
+            r = fn(ctx, step)
+            log.debug("处理器出口: %s %s", r.name, "PASS" if r.passed else "FAIL")
+            if not r.passed and r.note:
+                log.warning("%s 失败原因: %s", r.name, r.note)
+            return r
+        HANDLERS[t] = wrapped
+        return wrapped
     return deco
 
 

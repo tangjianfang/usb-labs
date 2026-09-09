@@ -4,6 +4,11 @@
 """
 from __future__ import annotations
 
+from .logbase import setup
+
+log = setup("usbsim.pd")
+_lg = log   # negotiate 的形参 log（抓包列表，历史签名）遮蔽模块 logger，函数内经 _lg 取用
+
 TYPE_GOODCRC, TYPE_ACCEPT, TYPE_REJECT, TYPE_PS_RDY = 1, 3, 4, 6
 TYPE_GET_SRC_CAP, TYPE_GET_SNK_CAP, TYPE_DR_SWAP, TYPE_PR_SWAP, TYPE_VCONN_SWAP = 7, 8, 9, 10, 11
 TYPE_SOFT_RESET, TYPE_NOT_SUPPORTED = 13, 16
@@ -93,21 +98,33 @@ class Sink:
 
 
 def negotiate(source: Source, sink: Sink, log: list | None = None) -> bool:
-    """完整协商: Source_Capabilities → Request → Accept → PS_RDY。返回是否达成合同。"""
+    """完整协商: Source_Capabilities → Request → Accept → PS_RDY。返回是否达成合同。
+
+    形参 log 为抓包列表（历史签名，保持不变）——遮蔽模块 logger，函数内经 _lg 取用。
+    """
     cap = source.send_caps()
+    _lg.debug("SRC→SNK %s（%d 个 PDO）", cap.describe(), len(cap.objects))
     if log is not None:
         log.append({"dir": "SRC→SNK", "hex": cap.hex(), "desc": cap.describe() + f"（{len(cap.objects)} 个 PDO）"})
     req = sink.evaluate(cap)
+    if req is None:
+        _lg.warning("PD 协商失败: 无电压 ≤%dV 的合适 Fixed PDO（源 %d 个 PDO 全不中）",
+                    sink.want_v, len(cap.objects))
+    else:
+        _lg.debug("SNK→SRC Request（RDO=0x%08X）", sink.rdo)
     if log is not None:
         log.append({"dir": "SNK→SRC", "hex": req.hex(), "desc": f"Request（RDO=0x{sink.rdo:08X}）"} if req
                    else {"dir": "SNK→SRC", "hex": "", "desc": "无合适 PDO"})
     if req is None:
         return False
     acc = Message(TYPE_ACCEPT, [], 1, "SRC")
+    _lg.debug("SRC→SNK Accept")
     if log is not None:
         log.append({"dir": "SRC→SNK", "hex": acc.hex(), "desc": "Accept"})
     rdy = Message(TYPE_PS_RDY, [], 2, "SRC")
+    _lg.debug("SRC→SNK PS_RDY（电源就绪）")
     if log is not None:
         log.append({"dir": "SRC→SNK", "hex": rdy.hex(), "desc": "PS_RDY（电源就绪）"})
     source.contract = sink.rdo
+    _lg.info("PD 协商完成: 合同 RDO=0x%08X", sink.rdo)
     return True

@@ -7,6 +7,9 @@ from __future__ import annotations
 from . import packets as P
 from .bus import Bus
 from .device import UsbDevice, HidDevice, MscDevice, HubDevice
+from .logbase import setup
+
+log = setup("usbsim.host")
 
 
 class Host:
@@ -34,6 +37,7 @@ class Host:
         ok, parsed = self.bus.send_data(setup, P.DATA0)
         dev = bus.device_at(addr)
         if not ok or dev is None:
+            log.debug("控制传输 addr=%d req=0x%02X 无设备确认 → NAK", addr, bRequest)
             self.bus.send_handshake(P.NAK, "无设备确认"); return None
         dev.ep0_setup(parsed)
         self.bus.send_handshake(P.ACK, "SETUP ACK")
@@ -70,20 +74,26 @@ class Host:
         bus = self.bus
         bus.devices[0] = dev
         bus.reset()
+        log.info("枚举: 总线复位完成，进入 Default 态（地址 0）")
         self.bus.log(b"", kind="ENUM", desc="阶段: Default 态, 读取设备描述符前 8 字节")
         d = self.control_transfer(0, 0x80, 0x06, 0x0100, 0, None, wlength=64) or b""
         assert len(d) >= 8 and d[7] == dev.ep0_mps, "EP0 MPS 与描述符不一致"
+        log.info("枚举: 首读设备描述符 8 字节，EP0 MPS=%d", d[7])
         self.bus.log(b"", kind="ENUM", desc="阶段: SET_ADDRESS")
         self.control_transfer(0, 0x00, 0x05, target_addr or self.addr, 0, b"")
         dev.address = target_addr or self.addr
         bus.devices[dev.address] = dev
         del bus.devices[0]
         self.bus.log(b"", kind="ENUM", desc=f"阶段: 地址 {dev.address}")
+        log.info("枚举: SET_ADDRESS → 地址 %d", dev.address)
         d = self.control_transfer(dev.address, 0x80, 0x06, 0x0100, 0, None, wlength=18)
         assert len(d) == 18, "设备描述符必须 18 字节"
+        log.info("枚举: 读完整设备描述符 18 字节（VID=0x%04X PID=0x%04X）",
+                 int.from_bytes(d[8:10], "little"), int.from_bytes(d[10:12], "little"))
         self.control_transfer(dev.address, 0x80, 0x06, 0x0200, 0, None, wlength=9)   # 配置头 9 字节
         self.control_transfer(dev.address, 0x80, 0x06, 0x0200, 0, b"\0" * 65535)
         self.control_transfer(dev.address, 0x00, 0x09, 0x0001, 0, b"")    # SET_CONFIGURATION 1
+        log.info("枚举: 配置描述符已读，SET_CONFIGURATION=1，枚举完成（地址 %d）", dev.address)
         return dev.address
 
     # ---------- 数据传输 API ----------

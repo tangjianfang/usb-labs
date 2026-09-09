@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 from . import packets as P
+from .logbase import TRACE, setup
+
+log = setup("usbsim.bus")
 
 
 class Bus:
@@ -23,10 +26,13 @@ class Bus:
     def log(self, packet: bytes, kind: str, desc: str):
         self.capture.append({"frame": self.frame, "kind": kind,
                              "hex": packet.hex(), "desc": desc})
+        # 包级逐包流水 → trace（对齐 C++ 语义：trace=逐包，不开不格式化，热路径零成本）
+        log.log(TRACE, "fr%u %s %s", self.frame, kind, desc)
 
     def reset(self):
         """总线复位（SE0 ≥10ms 的逻辑效果）：所有设备回 Default 态（地址 0）。"""
         self.log(b"", kind="RESET", desc="总线复位 SE0≥10ms")
+        log.info("总线复位: %d 台设备回 Default 态", len(self.devices))
         for d in self.devices.values():
             d.bus_reset()
 
@@ -47,6 +53,7 @@ class Bus:
         if self.drop_data_once:
             self.drop_data_once = False
             self.log(pkt, kind="DATA(DROPPED)", desc=f"CRC/电气错误: {parsed['payload']}")
+            log.info("错误注入: 丢弃 DATA 包一次（应触发重传, len=%d）", parsed["len"])
             return False, parsed
         self.log(pkt, kind="DATA", desc=f"{parsed['pid_name']} len={parsed['len']} {parsed['payload'][:24]}")
         return True, parsed

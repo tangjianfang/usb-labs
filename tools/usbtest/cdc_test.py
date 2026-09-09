@@ -1,15 +1,29 @@
 """CDC 产测后端：串口环回（工装）、线路编码读写、DFU 校验流程。
 依赖: pip install pyserial pyusb
 """
+import functools
+
 from usbtest.core import StepResult   # 旧版漏导入：真实后端任一步骤派发即 NameError（#77）
+from usbtest.logbase import setup
+
+log = setup("usbtest.cdc")
+devlog = setup("usbtest.device")      # 设备 open/close 生命周期（规格模块 usbtest.device）
 
 HANDLERS = {}
 
 
 def handler(t):
     def deco(fn):
-        HANDLERS[t] = fn
-        return fn
+        @functools.wraps(fn)
+        def wrapped(ctx, step):
+            log.debug("处理器入口: %s", step.get("name", t))
+            r = fn(ctx, step)
+            log.debug("处理器出口: %s %s", r.name, "PASS" if r.passed else "FAIL")
+            if not r.passed and r.note:
+                log.warning("%s 失败原因: %s", r.name, r.note)
+            return r
+        HANDLERS[t] = wrapped
+        return wrapped
     return deco
 
 
@@ -17,7 +31,9 @@ def open_device(dev):
     import serial
     port = dev.get("port")
     assert port, "请在计划 device.port 指定串口（如 COM7 / /dev/ttyACM0）"
-    return serial.Serial(port, int(dev.get("baud", 115200)), timeout=1)
+    s = serial.Serial(port, int(dev.get("baud", 115200)), timeout=1)
+    devlog.info("CDC 串口已打开: %s @%d", port, int(dev.get("baud", 115200)))
+    return s
 
 
 def _s(ctx):
