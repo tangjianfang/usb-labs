@@ -33,7 +33,7 @@ contract_i=2.25              # 当前合同电流
 vbus_v=9.02                  # VBUS 实测（固件 ADC）
 ```
 
-**Lab5 固件需新增 telemetry 模块**（在 PE_SNK Ready 状态与 VBUS 采样处向 CDC/调试口打印上述行）。契约已冻结：新增字段必须向后兼容（只加不改）。固件实现后，`pd_attach/pd_negotiate/measure_voltage` 三个处理器即可真机验证。
+**固件侧已实现（2026-09-10，ROADMAP T4）**：`labs/lab5-pd-charger/firmware/src/telemetry.c` 实现 `pd_telemetry_emit`（四行 key=value，MSVC 宿主自检实证输出格式）；`pe_sink.c` 每 500ms 节流 + 状态沿即时 emit；VBUS 经 `pd_telemetry_set_vbus_sampler()` 注入板级 ADC（未注入按 0.0，判定以 contract_v 为准）。契约冻结不变：新增字段只加不改。剩余口子 = 真机烧录 Lab5 固件后的三处理器真机验证（T8 工装域）。
 
 ## 三、状态定义
 
