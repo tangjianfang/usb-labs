@@ -86,6 +86,7 @@ typedef enum {
     PD_CTRL_GOODCRC       = 1,
     PD_CTRL_ACCEPT        = 3,
     PD_CTRL_REJECT        = 4,
+    PD_CTRL_WAIT          = 5,   /* PD Table 6-2 Control type（骨架 pe_sink.c 引用，原缺失） */
     PD_CTRL_PS_RDY        = 6,
     PD_CTRL_GET_SOURCE_CAP = 7,
     PD_CTRL_SOFT_RESET    = 13,

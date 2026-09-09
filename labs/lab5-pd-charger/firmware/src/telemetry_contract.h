@@ -1,8 +1,9 @@
-"""telemetry 契约（固件↔产测工具）：向调试/CDC 口周期打印 key=value 行。
-与 tools/usbtest/pd_test.py 的 _telemetry() 采集格式一一对应；只加字段不改名。
-嵌入点：PE_SNK Ready 状态（每次协议事件/每 500ms 节拍）与 VBUS ADC 采样处。
-契约版本: 1（2026-09-05）
-"""
+/* telemetry 契约（固件↔产测工具）：向调试/CDC 口周期打印 key=value 行。
+ * 与 tools/usbtest/pd_test.py 的 _telemetry() 采集格式一一对应；只加字段不改名。
+ * 嵌入点：PE_SNK Ready 状态（每次协议事件/每 500ms 节拍）与 VBUS ADC 采样处。
+ * 契约版本: 1（2026-09-05；2026-09-10 修正首行 Python 三引号为 C 注释——
+ *           骨架此前从未编译，HOST_TELEMETRY_SELFTEST 宿主自检时暴露）
+ */
 #pragma once
 #include <stdint.h>
 

@@ -16,6 +16,7 @@
  */
 
 #include "fusb302.h"
+#include "telemetry_contract.h"
 #include <string.h>
 
 /* ==========================================================================
@@ -59,6 +60,10 @@ typedef struct {
 
     pe_contract_cb_t on_contract;
     void (*log)(const char *s);
+
+    /* 遥测节流（telemetry.c，契约版本 1） */
+    uint32_t tele_ms;            /* 距上次 emit 的毫秒数 */
+    pe_sink_state_t tele_last_state;   /* 状态沿触发即时 emit */
 } pe_sink_ctx_t;
 
 /* ==========================================================================
@@ -305,6 +310,25 @@ void pe_sink_run(pe_sink_ctx_t *c, uint32_t dt_ms)
     if (c->on_contract && now_active != c->contract_active) {
         c->contract_active = now_active;
         c->on_contract(c->sel_mv, c->sel_ma, now_active);
+        c->tele_ms = 0;   /* 状态沿立即补一轮遥测（产测 2s 窗口保证命中） */
+    }
+
+    /* 遥测（契约见 telemetry_contract.h）：SNK_READY 下每 500ms 一轮，
+     * pd_test.py 靠它采集 cc_state/contract_v/contract_i/vbus_v */
+    c->tele_ms += dt_ms;
+    if (c->tele_ms >= 500u || c->tele_last_state != c->state) {
+        c->tele_ms = 0;
+        c->tele_last_state = c->state;
+        pd_telemetry_t t;
+        t.cc_state = (c->state == SNK_READY)    ? "Attached.SNK"
+                     : (c->state == SNK_WAIT_FOR_CAP) ? "Unattached.SNK"
+                     : (c->state == SNK_SELECT_CAP || c->state == SNK_TRANSITION_SINK)
+                         ? "Attached.SNK"
+                         : "Unattached.SNK";
+        t.contract_v = c->contract_active ? (float)c->sel_mv / 1000.0f : 0.0f;
+        t.contract_i = c->contract_active ? (float)c->sel_ma / 1000.0f : 0.0f;
+        t.vbus_v = pd_telemetry_sample_vbus();
+        pd_telemetry_emit(&t);
     }
 }
 
