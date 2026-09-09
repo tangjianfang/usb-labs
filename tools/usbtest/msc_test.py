@@ -104,22 +104,29 @@ def msc_capacity_probe(scsi):
 
 
 def msc_rw_cdb(op10, op16, lba, blocks):
-    """READ/WRITE CDB 选路（纯函数）：最高寻址 LBA（lba+blocks-1）≤0xFFFFFFFF
-    用 10 字节 CDB（最大兼容）；越过即 16 字节（LBA 8 字节大端）。
+    """READ/WRITE CDB 选路（纯函数）：10 字节 CDB 须同时满足最高寻址 LBA
+    （lba+blocks-1）≤0xFFFFFFFF 与块数 ≤0xFFFF（[7..8] 为 16 位域）；任一
+    越过即 16 字节（LBA 8 字节大端 [2..9]、传输长度 4 字节大端 [10..13]、
+    GROUP NUMBER [14]、CONTROL [15]——SBC-3，与 usbsim 设备侧/验收表 D11
+    手工 CDB 同口径）。
 
-    与 C++ msc_read_cdb 同口径（evolve #75/#76；WRITE 0x2A/0x8A 为对称扩展，
-    C++ 上位机本版只读、不实现写路径）。SBC-3 布位：10 字节
-    [1]=DPO/FUA 标志、LBA=[2..5]、[6]=GROUP NUMBER、块数=[7..8]；16 字节
-    LBA=[2..9]、块数=[12..13]。旧实现 LBA 装在 [1..4]、块数装在 [6..7] 且仅
-    9 字节——整体错位一字节：lba≠0 即错扇区（lab3 计划 lba:0 仅掩蔽 LBA 错位），
-    块数错位未被掩蔽（blocks:8 会被规范设备读作 0x0800=2048 块，与 CBW 数据长
-    失配）；lba≥2^32 另有 to_bytes(4) OverflowError。
+    与 C++ msc_read_cdb 同口径（evolve #75/#76/#79；WRITE 0x2A/0x8A 为对称
+    扩展，C++ 上位机本版只读、不实现写路径，且块读内核 blocks≤1024 上界使
+    16 位域不可达——Python 参考实现无上界，须自行选路）。旧版三病（#76 错位
+    一字节/lba≥2^32 OverflowError；#79 blocks>0xFFFF 晦涩 OverflowError）：
+    16 字节族传输长度旧为 16 位装法 [12..13]——值域 ≤0xFFFF 时与 BE32 字节
+    全同，越过即 to_bytes(2) OverflowError；现改 BE32 装载并入 blocks>0xFFFF
+    选路。构造期域校验以 ValueError 干净拒绝（负 lba/0 块/超 64 位·BE32 域，
+    usbsim MscDevice blocks=0 构造 ValueError 同口径）。
     """
-    if lba + blocks <= 0x100000000:
+    if not 0 <= lba <= 0xFFFFFFFFFFFFFFFF:
+        raise ValueError(f"lba {lba} 超出 64 位 LBA 域")
+    if not 0 < blocks <= 0xFFFFFFFF:
+        raise ValueError(f"blocks {blocks} 超出传输长度 BE32 域（1..0xFFFFFFFF）")
+    if lba + blocks <= 0x100000000 and blocks <= 0xFFFF:
         return (bytes([op10, 0]) + lba.to_bytes(4, "big") + b"\0" +
                 blocks.to_bytes(2, "big") + b"\0")
-    return (bytes([op16, 0]) + lba.to_bytes(8, "big") + b"\0\0" +
-            blocks.to_bytes(2, "big") + b"\0\0")
+    return bytes([op16, 0]) + lba.to_bytes(8, "big") + blocks.to_bytes(4, "big") + b"\0\0"
 
 
 @handler("msc_capacity")

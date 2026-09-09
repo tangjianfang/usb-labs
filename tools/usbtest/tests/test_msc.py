@@ -58,7 +58,7 @@ class FakeBotDev:
 
     CDB 取自 CBW[15:15+cbLen]（BOT 规范与 usbsim 仿真器 data[15:31] 同口径）；
     读写按 SBC-3 字节位解析（READ/WRITE(10)：LBA[2..5] 块数[7..8]；(16)：
-    LBA[2..9] 块数[12..13]），错位 CDB 在此即解不出预期 LBA。
+    LBA[2..9] 传输长度 BE32[10..13]·GROUP NUMBER [14]），错位 CDB 在此即解不出预期 LBA。
     """
 
     def __init__(self, total_sectors, block_size=512):
@@ -109,13 +109,13 @@ class FakeBotDev:
             self._frames += [payload, self._csw(tag, 0)]
         elif op in (0x28, 0x88):
             lba = int.from_bytes(cdb[2:10] if wide else cdb[2:6], "big")
-            blocks = int.from_bytes(cdb[12:14] if wide else cdb[7:9], "big")
+            blocks = int.from_bytes(cdb[10:14] if wide else cdb[7:9], "big")
             buf = self.written.get(lba)
             assert buf is not None and len(buf) == blocks * self.blk, "READ 未写区或长度不符"
             self._check_cbw(data, cdb, buf)
             self._frames += [buf, self._csw(tag, 0)]
         elif op in (0x2A, 0x8A):
-            blocks = int.from_bytes(cdb[12:14] if wide else cdb[7:9], "big")
+            blocks = int.from_bytes(cdb[10:14] if wide else cdb[7:9], "big")
             self._check_cbw(data, cdb, b"", out_len=blocks * self.blk)
             self._pending = (int.from_bytes(cdb[2:10] if wide else cdb[2:6], "big"), blocks)
             self._pending_tag = tag
@@ -196,9 +196,8 @@ class TestRwCdb(unittest.TestCase):
         cdb = msc_rw_cdb(0x28, 0x88, 0xFFFFFFFF, 2)
         self.assertEqual(cdb[0], 0x88)
         self.assertEqual(cdb[2:10], (0xFFFFFFFF).to_bytes(8, "big"))
-        self.assertEqual(cdb[10:12], b"\0\0")                    # GROUP NUMBER 段
-        self.assertEqual(cdb[12:14], (2).to_bytes(2, "big"))     # 块数 [12..13]
-        self.assertEqual(cdb[14:16], b"\0\0")
+        self.assertEqual(cdb[10:14], (2).to_bytes(4, "big"))     # 传输长度 BE32 [10..13]
+        self.assertEqual(cdb[14:16], b"\0\0")                    # GROUP NUMBER [14]+CONTROL [15]
         self.assertEqual(len(cdb), 16)
 
     def test_lba_over_32bit_no_overflow(self):
@@ -211,7 +210,37 @@ class TestRwCdb(unittest.TestCase):
         cdb = msc_rw_cdb(0x2A, 0x8A, 2**40, 16)
         self.assertEqual(cdb[0], 0x8A)
         self.assertEqual(cdb[2:10], (2**40).to_bytes(8, "big"))
-        self.assertEqual(cdb[12:14], (16).to_bytes(2, "big"))
+        self.assertEqual(cdb[10:14], (16).to_bytes(4, "big"))
+
+    def test_blocks_over_16bit_routes_to_16(self):
+        # 旧口径病（#76 P4 残余）：blocks>0xFFFF 时 blocks.to_bytes(2) 晦涩
+        # OverflowError——10 字节 CDB 块数域 [7..8] 仅 16 位，须并入 16 字节选路
+        cdb = msc_rw_cdb(0x28, 0x88, 0, 0x10000)
+        self.assertEqual((cdb[0], len(cdb)), (0x88, 16))
+        self.assertEqual(cdb[2:10], (0).to_bytes(8, "big"))
+        self.assertEqual(cdb[10:14], (0x10000).to_bytes(4, "big"))   # SBC-3 传输长度 BE32
+        self.assertEqual(cdb[14:16], b"\0\0")
+
+    def test_blocks_at_16bit_boundary_stays_10(self):
+        # 含端 0xFFFF 仍 10 字节（最大兼容），与高 LBA 边界含端口径一致
+        self.assertEqual((msc_rw_cdb(0x28, 0x88, 0, 0xFFFF)[0],
+                          len(msc_rw_cdb(0x28, 0x88, 0, 0xFFFF))), (0x28, 10))
+
+    def test_blocks_over_be32_field_rejected_cleanly(self):
+        # 传输长度 BE32 域上限（0x100000000 块）：构造期 ValueError 而非晦涩
+        # OverflowError（usbsim MscDevice blocks=0 构造 ValueError 同口径，#78）
+        with self.assertRaises(ValueError):
+            msc_rw_cdb(0x28, 0x88, 0, 0x100000000)
+
+    def test_zero_blocks_rejected_at_construction(self):
+        # 纯函数构造期拒绝 0 块（write_verify 处理器另有 assert 先行，双层口径）
+        with self.assertRaises(ValueError):
+            msc_rw_cdb(0x28, 0x88, 0, 0)
+
+    def test_negative_lba_rejected_cleanly(self):
+        # 负 LBA 同族晦涩 OverflowError（to_bytes 拒负数）→ 构造期 ValueError
+        with self.assertRaises(ValueError):
+            msc_rw_cdb(0x28, 0x88, -1, 8)
 
 
 class TestHandlers(unittest.TestCase):
@@ -263,6 +292,16 @@ class TestHandlers(unittest.TestCase):
         dev = FakeBotDev(0x10000000)
         with self.assertRaises(AssertionError):
             msc_test.HANDLERS["msc_write_verify"](self._ctx(dev), {"lba": 0, "blocks": 0})
+
+    def test_write_verify_blocks_over_16bit_roundtrip(self):
+        # 旧口径病（#76 P4 残余）：blocks>0xFFFF 派发即 OverflowError——现选
+        # WRITE16/READ16（传输长度 BE32 [10..13]）完成 32MiB 写读回环
+        dev = FakeBotDev(0x30000)
+        r = msc_test.HANDLERS["msc_write_verify"](self._ctx(dev), {"lba": 0, "blocks": 0x10000})
+        self.assertTrue(r.passed)
+        self.assertEqual(r.measured["bytes"], 0x10000 * 512)
+        self.assertEqual(dev.ops(), [0x8A, 0x88])
+        self.assertEqual(len(dev.written[0]), 0x10000 * 512)
 
 
 class UsbSimBotDev:
