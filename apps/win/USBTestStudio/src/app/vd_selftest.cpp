@@ -4,6 +4,8 @@
 #include "../src/shell/desc_parse.h"
 #include "../src/shell/shell_test.h"
 #include "../src/shell/vd_core.h"
+#include "../src/shell/vd_script.h"
+#include "../src/shell/vd_templates.h"
 
 namespace d = usts::shell::desc;
 namespace vd = usts::shell::vd;
@@ -172,6 +174,82 @@ static void test_vd_unconfigured_poll_naks() {
     CHECK(dev.state() == vd::DevState::Attached);
 }
 
+// ---------------------------------------------------------------------------
+// T2 · 模板 + 键盘报告源
+// ---------------------------------------------------------------------------
+static void test_templates() {
+    const auto& ts = vd::builtin_templates();
+    CHECK_EQ(ts.size(), 2u);
+    CHECK(ts[0].id == "hid-keyboard" && ts[1].id == "hid-composite");
+    for (const auto& t : ts) {
+        // 模板模型可直接 build（与 W3 启动闭环）
+        CHECK(!d::build_device_desc(t.model.device).empty());
+        CHECK(!d::build_config_blob(t.model.configs[0]).empty());
+    }
+    // 键盘报告源：序列步进循环（a=04）
+    vd::KeyboardReportSource src{&ts[0].key_seq};
+    auto r1 = src();
+    CHECK_EQ(r1.size(), 8u);
+    CHECK_EQ(r1[2], 0x04);
+    src(); src();   // 05, 06
+    auto r4 = src();
+    CHECK_EQ(r4[2], 0x00);           // 空
+    auto r5 = src();
+    CHECK_EQ(r5[2], 0x04);           // 回绕
+}
+
+// ---------------------------------------------------------------------------
+// T3 · 场景脚本
+// ---------------------------------------------------------------------------
+static void test_script_roundtrip_and_run() {
+    vd::VdScript sc;
+    sc.events = {
+        {vd::ScriptEvent::Kind::Wait, "configured", vd::Inject::None, 1},
+        {vd::ScriptEvent::Kind::Inject, "", vd::Inject::NakTimes, 3},
+        {vd::ScriptEvent::Kind::Assert, "state:Configured", vd::Inject::None, 1},
+        {vd::ScriptEvent::Kind::Delay, "", vd::Inject::None, 2},
+    };
+    const std::string j = sc.to_json();
+    vd::VdScript o;
+    std::string err;
+    CHECK(vd::VdScript::from_json(j, o, err));
+    CHECK_EQ(o.events.size(), 4u);
+    CHECK(o.events[0].kind == vd::ScriptEvent::Kind::Wait);
+    CHECK_EQ(o.events[1].count, 3);
+    CHECK(o.events[2].cond == "state:Configured");
+    CHECK(o.to_json() == j);
+    CHECK(!vd::VdScript::from_json("{bad", o, err));
+    CHECK(!vd::VdScript::from_json("{}", o, err));            // 缺 events
+    // 执行：设备未配置时 Wait 阻塞
+    vd::VirtualDevice dev(vd::builtin_templates()[0].model);
+    vd::ScriptRunner run(sc);
+    auto st = run.step(dev);
+    CHECK(!st.done && st.note.find("等待") != std::string::npos);
+    // 驱动到 Configured → Wait 过 → Inject 执行 → Assert 过 → Delay 2 步 → done
+    uint8_t s[8];
+    s[0]=0x80; s[1]=0x06; s[2]=0; s[3]=1; s[4]=0; s[5]=0; s[6]=18; s[7]=0;
+    dev.host_ctrl(s);
+    s[0]=0; s[1]=5; s[2]=5; dev.host_ctrl(s);
+    s[0]=0; s[1]=9; s[2]=1; dev.host_ctrl(s);
+    st = run.step(dev);                    // Wait 满足
+    CHECK(st.note.empty());
+    st = run.step(dev);                    // Inject
+    CHECK_EQ(dev.stats().nak, 0);          // 注入就绪未触发 poll
+    st = run.step(dev);                    // Assert state:Configured
+    CHECK(!st.failed);
+    st = run.step(dev);                    // Delay 第 1 拍
+    CHECK(!st.done);
+    st = run.step(dev);                    // Delay 第 2 拍 → 过
+    CHECK(st.done);
+    // 断言失败路径
+    vd::VdScript bad;
+    bad.events = {{vd::ScriptEvent::Kind::Assert, "state:Configured", vd::Inject::None, 1}};
+    vd::ScriptRunner run2(bad);
+    vd::VirtualDevice fresh(vd::builtin_templates()[0].model);
+    auto f = run2.step(fresh);
+    CHECK(f.failed && f.note.find("断言失败") != std::string::npos);
+}
+
 int main() {
     ustlog::init(true, L"vd-selftest");
     auto log = ustlog::logger("app.shell");
@@ -180,6 +258,8 @@ int main() {
     RUN_TEST(test_vd_breakpoints);
     RUN_TEST(test_vd_injections);
     RUN_TEST(test_vd_unconfigured_poll_naks);
+    RUN_TEST(test_templates);
+    RUN_TEST(test_script_roundtrip_and_run);
     const int rc = shell_test::run_all("vd_selftest");
     log->info("vd_selftest 结束 rc={}", rc);
     return rc;
