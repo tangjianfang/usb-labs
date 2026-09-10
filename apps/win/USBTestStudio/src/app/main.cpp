@@ -7,6 +7,7 @@
 #include "app/version.h"
 #include "shell/crashdump.h"
 #include "shell/desc_editor.h"
+#include "shell/te_editor.h"
 #include "shell/vd_editor.h"
 #include "shell/panel_registry.h"
 #include "shell/main_window_ds.h"
@@ -161,6 +162,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
             "w2.descriptor", &shell::desc::DescEditorPanel::create_w2);   // MS1：W2 真面板
         shell::PanelRegistry::instance().set_factory(
             "w3.vd", &shell::vd::VdEditorPanel::create_w3);               // MS2：W3 真面板
+        shell::PanelRegistry::instance().set_factory(
+            "w5.runner", &shell::te::RunnerPanel::create_w5);             // MS3：W5 执行视图
+        shell::PanelRegistry::instance().set_factory(
+            "w6.report_list", &shell::te::ReportPanel::create_w6);        // MS3：W6 报告中心
         shell::MainWindowDS::register_commands();
         shell::MainWindowDS win;
         if (!win.create(hInstance, cfg, layout)) {

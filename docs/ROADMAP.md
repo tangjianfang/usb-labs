@@ -28,7 +28,7 @@
 - ☑ **MS0 · IDE 壳** ✓ 35e3418（推送 origin）：四视角/命令面板/工程模型 .ustsproj/面板注册表/设置+布局持久化/崩溃 minidump/6 靶 512 例全绿/exe 更名 USBDevStudio v0.10.0；实施计划 docs/superpowers/plans/2026-09-11-devstudio-ms0.md T1~T12 全勾
 - ☑ **MS1 · 描述符编译器** ✓（三向闭环+round-trip 幂等性质测试/Linter 25 规黄金样例实战首胜/字段 diff/W2 面板替换桩/第七靶 16 例/v0.11.0——证据见 git log feat(MS1)）
 - ☑ **MS2 · 虚拟调试器** ✓（C++ vd_core 架构诚实账落账/枚举字节级=MS1 产物/断点五类/注入五型/ustssim 脚本/ustsvd 进程内协议/W3 面板真替换/第八靶 9 例/v0.12.0——证据见 git log feat(MS2)）
-- ☐ **MS3 · 测试台+产线归位**（Test Explorer/双后端/Pipeline/EP-4 迁移）
+- ☑ **MS3 · 测试台+产线归位** ✓（计划模型/双后端 mock+virtual(vd 真跑)/Pipeline abort·continue/执行视图+报告中心面板真替换/第九靶 4 例/v0.13.0；EP-4 完整面板化与 YAML 解析归滚动——合并计划诚实账）
 - ☐ **MS4 · 协议追踪台**（DSL/统计/USBPcap/pcapng）
 - ☐ **MS5+ · 滚动**（W1 诊断/插件 SDK/脚本台/知识服务扩展）
 

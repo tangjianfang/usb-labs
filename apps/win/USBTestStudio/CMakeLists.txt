@@ -190,3 +190,19 @@ if(MSVC)
     target_compile_options(vd_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
 target_link_libraries(vd_selftest PRIVATE setupapi shlwapi dbghelp comctl32)
+
+# DevStudio MS3 测试台离线自测（计划模型/双后端/Pipeline/执行视图与报告面板）
+add_executable(te_selftest
+    src/app/te_selftest.cpp
+    src/framework/win32_rai.cpp
+    src/framework/json_mini.cpp
+)
+target_include_directories(te_selftest PRIVATE ${UTS_COMMON_INC})
+target_compile_definitions(te_selftest PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES
+)
+if(MSVC)
+    target_compile_options(te_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()
+target_link_libraries(te_selftest PRIVATE setupapi shlwapi dbghelp comctl32)
