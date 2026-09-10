@@ -5,6 +5,7 @@
 #include "../src/shell/shell_test.h"
 #include "../src/shell/vd_core.h"
 #include "../src/shell/vd_script.h"
+#include "../src/shell/vd_host.h"
 #include "../src/shell/vd_templates.h"
 
 namespace d = usts::shell::desc;
@@ -250,6 +251,52 @@ static void test_script_roundtrip_and_run() {
     CHECK(f.failed && f.note.find("断言失败") != std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// T4 · ustsvd 协议与会话
+// ---------------------------------------------------------------------------
+static void test_vd_msg_roundtrip() {
+    vd::VdMsg m;
+    m.t = "vd_event"; m.seq = 42; m.ts_ms = 7;
+    m.summary = "SETUP"; m.mark = 2;
+    const std::string line = m.to_json_line();
+    vd::VdMsg o;
+    std::string err;
+    CHECK(vd::VdMsg::from_json_line(line, o, err));
+    CHECK_EQ(o.t, std::string("vd_event"));
+    CHECK_EQ(o.seq, 42u);
+    CHECK_EQ(o.ts_ms, 7u);
+    CHECK_EQ(o.summary, std::string("SETUP"));
+    CHECK_EQ(o.mark, 2);
+    CHECK(!vd::VdMsg::from_json_line("{bad", o, err));
+    CHECK(!vd::VdMsg::from_json_line("{}", o, err));            // 缺 t
+}
+
+static void test_vd_session_flow() {
+    std::vector<vd::VdMsg> got;
+    vd::VdSession ses(vd::builtin_templates()[0].model, "hid-keyboard",
+                      [&] (const vd::VdMsg& m) { got.push_back(m); });
+    ses.start();
+    CHECK(ses.started());
+    uint8_t s[8];
+    s[0]=0x80; s[1]=0x06; s[2]=0; s[3]=1; s[4]=0; s[5]=0; s[6]=18; s[7]=0;
+    CHECK_EQ(ses.ctrl(s).size(), 18u);          // 枚举首事务
+    s[0]=0x80; s[1]=0x77; s[2]=0; s[3]=0; s[4]=0; s[5]=0; s[6]=0; s[7]=0;
+    ses.ctrl(s);                                 // STALL → vd_break 消息
+    ses.inject(vd::Inject::StallNext, 1);        // 注入消息+事件
+    ses.stop();
+    // 消息序：vd_start → 事件×N → vd_break(stall) → vd_inject → 注入事件×2 → vd_stop
+    CHECK_EQ(got.front().t, std::string("vd_start"));
+    CHECK_EQ(got.back().t, std::string("vd_stop"));
+    bool has_event = false, has_break = false, has_inject = false;
+    for (const auto& m : got) {
+        if (m.t == "vd_event") has_event = true;
+        if (m.t == "vd_break") has_break = true;
+        if (m.t == "vd_inject") has_inject = true;
+    }
+    CHECK(has_event && has_break && has_inject);
+    CHECK(!ses.started());
+}
+
 int main() {
     ustlog::init(true, L"vd-selftest");
     auto log = ustlog::logger("app.shell");
@@ -260,6 +307,8 @@ int main() {
     RUN_TEST(test_vd_unconfigured_poll_naks);
     RUN_TEST(test_templates);
     RUN_TEST(test_script_roundtrip_and_run);
+    RUN_TEST(test_vd_msg_roundtrip);
+    RUN_TEST(test_vd_session_flow);
     const int rc = shell_test::run_all("vd_selftest");
     log->info("vd_selftest 结束 rc={}", rc);
     return rc;
