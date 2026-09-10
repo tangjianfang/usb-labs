@@ -3,6 +3,7 @@
 // 运行：apps/win/build/Release/desc_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
 #include "../src/shell/desc_build.h"
+#include "../src/shell/desc_gen_c.h"
 #include "../src/shell/desc_model.h"
 #include "../src/shell/desc_parse.h"
 #include "../src/shell/shell_test.h"
@@ -288,6 +289,51 @@ static void test_build_roundtrip_properties() {
     CHECK_EQ(b3[4], 2);                                        // bNumInterfaces 不变
 }
 
+// ---------------------------------------------------------------------------
+// T4 · C 代码生成（两模板）
+// ---------------------------------------------------------------------------
+static bool contains(const std::string& hay, const char* needle) {
+    return hay.find(needle) != std::string::npos;
+}
+
+static void test_gen_c_tinyusb() {
+    const d::DescModel m = golden_model();
+    d::GenOptions opt;
+    opt.tpl = d::GenTemplate::TinyUsb;
+    opt.model_name = "lab1";
+    const std::string c = d::generate_c(m, opt);
+    CHECK(contains(c, "desc_device[18]"));
+    CHECK(contains(c, "desc_fs_configuration[]"));
+    CHECK(contains(c, "hid_report_descriptor[]"));
+    CHECK(contains(c, "string_desc_arr"));
+    CHECK(contains(c, "lab1.ustsdesc"));
+    // 设备头 18 字节逐项在场（首字段 0x12, 0x01）
+    CHECK(contains(c, "0x12, 0x01"));
+    // 配置长度注释 = 59
+    CHECK(contains(c, "59 字节"));
+    // 报告字节数组含样例前缀
+    CHECK(contains(c, "0x05, 0x01, 0x09, 0x06"));
+    // 字符串行含 LANGID 0x0409 与文本注释
+    CHECK(contains(c, "0x0409"));
+    CHECK(contains(c, "// USB-Lab"));
+    // 行格式：每行 ≤16 字节 → 存在换行续行（59B 配置必产生多行）
+    CHECK(contains(c, "\n    0x"));
+}
+
+static void test_gen_c_plain_and_diff_from_tiny() {
+    const d::DescModel m = golden_model();
+    d::GenOptions opt;
+    opt.tpl = d::GenTemplate::PlainArrays;
+    opt.model_name = "plain";
+    const std::string c = d::generate_c(m, opt);
+    CHECK(contains(c, "dev_desc[18]"));
+    CHECK(contains(c, "cfg_desc[]"));
+    CHECK(contains(c, "hid_report_0[]"));
+    CHECK(!contains(c, "desc_fs_configuration"));   // 两模板命名互斥
+    const std::string tiny = d::generate_c(m, {d::GenTemplate::TinyUsb, "lab1"});
+    CHECK(tiny != c);
+}
+
 int main() {
     ustlog::init(true, L"desc-selftest");
     auto log = ustlog::logger("app.shell");
@@ -301,6 +347,8 @@ int main() {
     RUN_TEST(test_parse_strings_and_attach_report);
     RUN_TEST(test_build_golden_bytes);
     RUN_TEST(test_build_roundtrip_properties);
+    RUN_TEST(test_gen_c_tinyusb);
+    RUN_TEST(test_gen_c_plain_and_diff_from_tiny);
 
     const int rc = shell_test::run_all("desc_selftest");
     log->info("desc_selftest 结束 rc={}", rc);
