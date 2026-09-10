@@ -3,6 +3,7 @@
 // 运行：apps/win/build/Release/desc_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
 #include "../src/shell/desc_build.h"
+#include "../src/shell/desc_diff.h"
 #include "../src/shell/desc_gen_c.h"
 #include "../src/shell/desc_lint.h"
 #include "../src/shell/desc_model.h"
@@ -494,6 +495,46 @@ static void test_lint_rules_meta_and_file() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T6 · 字段级 diff
+// ---------------------------------------------------------------------------
+static void test_diff_models() {
+    const d::DescModel m = golden_model();
+    // 相同=零差异
+    CHECK(d::diff_models(m, m).empty());
+    CHECK_EQ(d::diff_summary({}), std::wstring(L"0 处差异"));
+    // 单字段：vid
+    auto n = m;
+    n.device.vid = 0x1234;
+    const auto d1 = d::diff_models(m, n);
+    CHECK_EQ(d1.size(), 1u);
+    CHECK_EQ(d1[0].path, std::string("device.idVendor"));
+    CHECK_EQ(d1[0].a, std::string("0x2341"));
+    CHECK_EQ(d1[0].b, std::string("0x1234"));
+    CHECK_EQ(d::diff_summary(d1), std::wstring(L"1 处差异"));
+    // 结构增删：加一端点
+    auto e = m;
+    d::EndpointDesc extra{0x83, 3, 8, 10};
+    e.configs[0].interfaces[0].endpoints.push_back(extra);
+    const auto d2 = d::diff_models(m, e);
+    CHECK_EQ(d2.size(), 1u);   // 仅"新增端点"一条（对齐语义）
+    CHECK(d2[0].path.find("endpoints[1]") != std::string::npos);
+    CHECK_EQ(d2[0].a, std::string("(新增)"));
+    // 删接口
+    auto f = m;
+    f.configs[0].interfaces.pop_back();
+    const auto d3 = d::diff_models(m, f);
+    CHECK_EQ(d3.size(), 1u);
+    CHECK(d3[0].path.find("interfaces[1]") != std::string::npos);
+    CHECK_EQ(d3[0].b, std::string("(删除)"));
+    // 报告描述符变化（截断展示）
+    auto h = m;
+    h.configs[0].interfaces[0].hid->report_hex = "050109";
+    const auto d4 = d::diff_models(m, h);
+    CHECK_EQ(d4.size(), 1u);
+    CHECK(d4[0].path.find("hid.report") != std::string::npos);
+}
+
 int main() {
     ustlog::init(true, L"desc-selftest");
     auto log = ustlog::logger("app.shell");
@@ -522,6 +563,7 @@ int main() {
     RUN_TEST(test_lint_golden_clean);
     RUN_TEST(test_lint_rule_triggers);
     RUN_TEST(test_lint_rules_meta_and_file);
+    RUN_TEST(test_diff_models);
 
     const int rc = shell_test::run_all("desc_selftest");
     log->info("desc_selftest 结束 rc={}", rc);
