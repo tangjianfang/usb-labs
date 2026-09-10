@@ -367,3 +367,207 @@ DFU 下载器…                   → 仅 DFU 接口设备
 ## 10. 面板注册表（框架-面板契约）
 
 每个面板实现 `panel_get() -> {id, 名称, 图标, 支持的设备类型, create(宿主句柄), destroy()}`；框架按 DLL/静态注册表装配中央区与右键菜单。**新增面板零改框架**——这也是 V2.0 第三方插件 ABI 的同一接口。
+
+---
+
+# 附录 A · 步骤类型注册表（23 型，字段与两侧实现逐键对齐）
+
+> **解耦机制（表单即数据）**：M2 计划编辑器的参数表单、步骤库、校验器、微图表选择、右键菜单全部由本注册表**数据驱动渲染**——新增步骤类型 = 注册表加一行，UI 零改。
+> **正确性机制（CI 对账）**：注册表每型的字段键集合必须 ≡ 对应后端代码实际读取的 `step.get()` 键集合（Python `*_test.py` 与 Win 引擎两侧分别对账），对账测试进 CI——注册表永不与实现漂移。
+
+### A.0 注册表条目结构
+
+```json
+{ "type": "hid_polling_rate", "backend": "hid", "icon": "chart",
+  "fields": [ {"key":"seconds","label":"采样时长","control":"number","default":2,"min":1,"max":60,"unit":"s"} ],
+  "limits":  [ {"key":"min_hz","control":"number","required":true,"unit":"Hz"} ],
+  "fixture": "移动机构或固件自测上报模式",       // 工装 badge 文案；空串=无工装；"DESTRUCTIVE"=红 badge
+  "chart":   "histogram_hz",                    // §4 微图表注册名；null=无
+  "verdict": "hz ≥ min_hz" }                    // 判定说明（显示用，真实判定在引擎）
+```
+
+控件型枚举：`text / hex(自动补齐奇数位) / number / dropdown / path / bytes(hex 数组) / duration`。
+
+### A.1 计划级字段（所有计划共享）
+
+| 字段 | 控件 | 默认 | 校验 |
+|---|---|---|---|
+| name | text | 未命名计划 | 非空 |
+| station | text | STN-01 | — |
+| dut_sn | text | AUTO | 产线模式禁 AUTO |
+| device.backend | dropdown(9 值) | mock | ∈{hid,cdc,msc,uvc,uac,pd,ble,dock,mock} |
+| device.vid / pid | hex | 0x0000 | 0xFFFF ≥ x ≥ 0 |
+| device.port / telemetry_port | dropdown(枚举 COM) | — | 串口类步骤必填 |
+| device.baud | dropdown | 115200 | ∈{9600…921600 常用表} |
+| device.drive | number | -1 | -1=自动探测(仅 BusTypeUsb) |
+| device.camera_index | number | 0 | ≥0 |
+
+### A.2 逐类型字段表（默认值=未填时代码实际取值，两侧已核对）
+
+| 类型@后端 | 专有字段（键:控件=默认[校验]） | 判定 | 工装 badge | 微图表 |
+|---|---|---|---|---|
+| enumerate@hid | —；limits.min_interfaces:number[可选] | interfaces>0 或 ≥min | — | — |
+| descriptor_check@hid | usage_page:hex[可选] · usage:hex[可选] | HIDP_CAPS 与白名单一致 | — | — |
+| hid_polling_rate@hid | seconds:number=2[1–60] · limits.min_hz:number[必填] | hz≥min_hz | 移动机构/固件自测 | histogram_hz |
+| hid_output_write@hid | report:bytes[必填,[0]=RID] · report_id:number[可选] | written≥0 | LED 目检/光敏 | — |
+| hid_report_loopback@hid | pattern:hex=00..FF · report_id:number · timeout_ms:number=1000 | 回显逐字节一致 | 环回固件模式 | — |
+| serial_loopback@cdc | repeat:number=1[1–16] | 图案回显逐字节一致 | **TX-RX 短接治具** | — |
+| line_coding@cdc | baud:dropdown=115200 | SET_LINE_CODING 读回一致 | — | — |
+| dfu_verify@cdc | image:path[必填] · alt:number=0 · timeout_s:number=60 | dfu-util 退出码 0+校验 | dfu-util+DFU 分区 | 进度条 |
+| msc_inquiry@msc | — | INQUIRY 状态 0 | — | — |
+| msc_capacity@msc | limits.min_gb:number[必填] | gb≥min_gb（RC10 哨兵自动升 RC16） | — | — |
+| msc_write_verify@msc | — | 写读图案一致 | **DESTRUCTIVE**（红 badge，危险确认流） | — |
+| msc_read_verify@msc/win | lba:number=0 · blocks:number=8 · loops:number=1 | 同段双读一致且非全 00/FF | 只读安全 | — |
+| uvc_formats@uvc | — | 格式/分辨率树非空 | opencv+libusb DLL | — |
+| uvc_capture_frames@uvc | frames:number=30 | 实拍张数达标出图 | 同上 | 帧缩略条 |
+| uac_record_level@uac | limits.min_db:number[可选] · limits.max_db:number[可选] | dBFS∈[min,max] | OS 音频路由+sounddevice | 电平条 |
+| pd_attach@pd | window_ms:number=2000 | cc_state 含 Attached | Lab5 遥测固件契约 | CC 状态条 |
+| pd_negotiate@pd | command:text[可选,采集前下发] · expect_v:number[必填] · tol_v:number=0.5 | contract_v±tol_v | 同上 | 电压卡 |
+| measure_voltage@pd | expect_v:number[必填] · tol_v:number=0.25 · scpi_resource:text[可选] · scpi_query:text[可选] | vbus_v±tol_v（有 SCPI 则仪器读数优先） | 遥测固件或 SCPI 仪器 | VBUS 波形 |
+| ble_scan_connect@ble | duration:number=5[s] · device.name_prefix:text | 发现+连接成功 | 屏蔽箱+BLE 适配器 | RSSI 条 |
+| ble_gatt_discover@ble | service:hex UUID[可选过滤] | 服务/特征数>0 | 同上 | — |
+| ble_hid_notify@ble | count:number=3 | 通知条数≥count | 同上 | — |
+| dock_topology@dock | — | 拓扑行数>0（UsbTreeView 优先/pnputil 回退） | — | — |
+| hub_port_cycle@dock | loops:number=5 · expect_id:text[可选] | 循环后拓扑稳定且含 expect_id | 插拔机构/手动 | — |
+
+### A.3 通用规则
+
+1. `name` 所有类型公共（默认=类型中文名）；`limits` 结构公共（min/max/±tol 三型，超限即 FAIL 不中断整站）；
+2. 未知类型：编辑器回退"原始键值对"表单（§2.2），执行器记 FAIL 继续（现行口径）；
+3. **对账测试**（进 CI）：逐型断言 `注册表字段键集 == Python 后端 step.get() 键集 == Win 引擎参数键集`——三方漂移即红。
+
+---
+
+# 附录 B · 视觉 token 与图标规格（单一事实源 `src/ui/tokens.h`）
+
+> **解耦机制**：全部颜色/字号/间距/尺寸以语义 token 编译期常量表达，控件库与面板只引用 token 名——换主题/调密度只改 tokens.h。深色主题(P1) = 同名 token 换值，零改面板代码。
+
+### B.1 色板（浅色 V1.0；括号内=深色 P1 预留）
+
+| token | 值 | 用途 |
+|---|---|---|
+| c.primary / c.primary.bg | #1565C0 / #E3F2FD | 主按钮/选中/链接（深:#64B5F6/#0D47A1 底） |
+| c.pass | #2E7D32 | PASS 态、成功 |
+| c.fail | #C62828 | FAIL、危险按钮底 |
+| c.run | #1565C0 | 运行中（呼吸动画 1.2s 周期 α 40–100%） |
+| c.warn | #F9A825 | 警告/超限值 |
+| c.off | #9E9E9E | 禁用/跳过 |
+| c.bg / c.bg.alt | #FFFFFF / #F5F5F5 | 窗口底/斑马纹（深:#1E1E1E/#252525） |
+| c.border | #E0E0E0 | 分隔线/描边 |
+| c.text / c.text.dim | #212121 / #757575 | 主文/次文 |
+| c.focus | c.primary α30% | 焦点框 |
+| c.danger.zone | #FFEBEE | 危险对话框底色 |
+
+### B.2 字体
+
+| token | 值 | 用途 |
+|---|---|---|
+| font.ui | Segoe UI 9pt（中文回退 Microsoft YaHei UI） | 全 UI 默认 |
+| font.mono | Consolas 9pt（中文回退等宽） | 日志/HEX/代码 |
+| font.h1 / h2 | 12pt/10.5pt semibold | 面板标题/分组 |
+| font.operator | 48pt bold | 产线大屏 SN/verdict |
+
+### B.3 尺寸与间距 token（96dpi 基准，运行期按 DPI 缩放）
+
+| token | 值 | | token | 值 |
+|---|---|---|---|---|
+| space.unit | 4px（间距只取 4/8/12/16/24） | | ctrl.h | 28px（紧凑 24） |
+| row.h | 24px | | tree.node.h | 22px |
+| margin.panel | 12px | | margin.group | 16px |
+| win.default | 1280×800 | | win.min | 1024×640 |
+| icon.s | 16px | | icon.l（大屏） | 64px |
+
+### B.4 图标集（16px 视窗、1px 线宽、单色填充 token.current，自绘路径库 `src/ui/icons/`）
+
+清单（35 枚，命名=语义）：`scan · play · stop · pause · gear · fullscreen · lock · unlock · warn · bell · camera · record · chip · keyboard · mouse · plug · disk · video · audio · bt · bolt · download · report · diff · folder · file · copy · trash · refresh · plus · minus · check · cross · filter · search`。
+规则：危险动作图标（trash/record/erase）渲染时以 c.fail 着色；悬停态亮度 +10%；禁用态 c.off。新增图标=路径库加文件+清单登记，禁止面板内联画图。
+
+---
+
+# 附录 C · 交互细则（全局规则，面板不得各自发明）
+
+### C.1 焦点与键盘导航
+1. 焦点顺序：面板内左→右、上→下；Ctrl+Tab/Ctrl+Shift+Tab 切中央标签；F6 循环 左栏→中央→右栏→状态栏。
+2. 表格/树获焦点后 ↑↓ 移动、Enter=默认动作（等效双击）、Space=切换勾选、菜单键/Shift+F10=右键菜单。
+3. Esc 逐层退出：对话框→下拉→过滤框→无操作；全局仅"运行中 Esc=停止"优先。
+
+### C.2 选择模型
+目录/报告/步骤树支持 Ctrl 单加、Shift 范围；多选时右键只显示批量适用项（复制/导出/删除/启用禁用），单选专属项（会话/跑计划）隐藏不置灰。
+
+### C.3 撤销/重做
+计划编辑器 P0 提供**单级撤销**（Ctrl+Z：步骤增/删/改/排序的最后一次操作）；保存后清栈；P1 升多级（栈深 50）。其余面板不做撤销（破坏性操作走危险确认流替代）。
+
+### C.4 文本截断与复制
+1. 单行超列宽：省略号+悬停 tooltip 全文；
+2. HEX 长串：显示前 16 后 8 字节中间 `…`，点击=复制全文；
+3. Ctrl+Shift+C 复制行=TSV 带时间戳；所有"复制"操作成功后状态栏 toast"已复制"。
+
+### C.5 列状态持久化
+键规范 `layout.json → panels.<panel_id>.col.<col_key> = {width, order, sort_dir, visible}`；损坏条目静默重置该键并计数告警一次。
+
+### C.6 拖拽语义
+| 源→目标 | 行为 |
+|---|---|
+| 步骤树内部 | 排序（虚线插入指示，拖到自身上方=无效） |
+| 目录行→中央区 | 打开该设备默认会话 |
+| 镜像文件→DFU 面板 | 填入镜像路径（校验扩展名 .bin/.dfu/.hex，非法=红框拒收） |
+其余区域一律不接受拖入（鼠标 no-drop）。
+
+### C.7 双击语义表（唯一入口，禁止面板自定义）
+目录行=默认会话 · 报告行=报告详情 · 步骤行(FAIL)=失败详情展开 · 通知=跳转源面板 · GATT 特征=读值。
+
+### C.8 数值输入
+滚轮/↑↓ 步进（整数 1、小数 0.1）；失焦校验 min/max，非法=红框保留原值并 tooltip 原因；单位后缀常显。
+
+### C.9 危险冷却
+危险型按钮执行后 2s 冷却不可重复点击（防连击双写盘）；写盘类步骤整计划内只允许出现一次（编辑器校验规则）。
+
+---
+
+# 附录 D · IPC schema（字段级）与运行态矩阵
+
+> **解耦机制**：GUI 与 runner 只经管道消息对话；信封版本化，未知消息类型**忽略+计数告警**（前向兼容）；payload 字段名 ≡ 现行报告 JSON 契约字段（冻结引用，不另造一套）。
+
+### D.0 信封与消息（命名管道 `\\.\pipe\USTS-Runner-<pid>`，UTF-8 JSON-lines，行缓冲）
+
+```json
+{"v":1,"t":"step_result","ts":"2026-09-10T12:00:01.123","pid":8210,
+ "payload":{"idx":2,"name":"回报率","pass":true,
+            "measured":{"hz":998.7,"min_hz":943.1,"max_hz":1012.6,"samples":1996},
+            "note":""}}
+```
+
+| t | 方向 | payload 字段 |
+|---|---|---|
+| plan_load | GUI→runner | {plan(整棵), dut_sn, station, mock} |
+| plan_loaded | runner→GUI | {steps:[{idx,name,type}], backend} |
+| step_start | runner→GUI | {idx, name} |
+| step_progress | runner→GUI | {idx, measured(部分键), pct?}（≥4Hz 节流） |
+| step_result | runner→GUI | {idx, name, pass, measured, note}（字段≡报告 steps[] 元素） |
+| run_done | runner→GUI | {verdict, crashed, report_path, elapsed_ms, pass_n, total} |
+| cancel | GUI→runner | {}（2s 未退=强杀，GUI 收 crashed） |
+| log | runner→GUI | {level, mod, msg}（WARN 及以上转发通知中心） |
+| heartbeat | runner→GUI | {}（1s；GUI 连失 3 拍=标崩溃态） |
+
+### D.1 运行态启停矩阵（●=启用 ○=禁用 ◐=仅查看）
+
+| 控件组 | 空闲 | 运行中 | 崩溃待处理 |
+|---|---|---|---|
+| 工具栏 扫描 | ● | ● | ● |
+| 工具栏 运行/计划▾/SN 框 | ● | ○ | ○ |
+| 工具栏 停止 | ○ | ● | ○ |
+| 工具栏 大屏/设置 | ● | ● | ● |
+| M1 目录 双击/右键-会话 | ● | ◐(现有会话可收发，**新开被租设备拒**) | ● |
+| M1 右键-跑计划 | ● | ○ | ● |
+| M2 编辑器 整页 | ● | ◐(只读+提示"运行中锁定") | ● |
+| M2 执行视图 ⟳单步重跑 | ● | ○ | ● |
+| M3 发送/开新会话 | ● | ●(非被租设备) | ● |
+| M5 报告对比/导出 | ● | ● | ● |
+| 文件-导出报告 | ● | ● | ● |
+
+### D.2 设备租赁（跨进程互斥）
+
+互斥量命名 `Global\USTS\dev\<sha1(设备实例路径)前 16>`；租约旁路文件 `%TEMP%\USTS\leases\<同 hash>.json`={pid, holder("panel:console"/"runner"), ts}（仅用于"占用情况"视图展示与诊断，**正确性只以互斥量为准**）；GUI 退出时不释放 runner 持有的租约（runner 生命期独立）。
+
+### D.3 版本与兼容规则
+v1 信封字段只增不改（同 PD 遥测契约原则）；GUI 收到未知 `t`：丢弃+通知中心 warn 计数；runner 收到未知 `t`：忽略；`v` 不识别=断管报错（大版本不兼容不猜测）。
