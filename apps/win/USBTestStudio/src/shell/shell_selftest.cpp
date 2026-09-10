@@ -2,10 +2,12 @@
 // 命令+模糊/工程模型/模板库/日志视图模型/崩溃管理，随任务逐个追加 RUN_TEST）。
 // 运行：apps/win/build/Release/shell_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
+#include "../src/shell/settings.h"
 #include "../src/shell/shell_test.h"
 #include "../src/ui/tokens.h"
 
 namespace t = usts::ui::tokens;
+namespace sh = usts::shell;
 
 // ---------------------------------------------------------------------------
 // T1 · tokens 单源（值=设计附录 E.6，改 token 前先改设计）
@@ -48,6 +50,57 @@ static void test_tokens_icon_enum() {
     CHECK(static_cast<int>(t::Icon::Pipeline) - static_cast<int>(t::Icon::Scan) == 38);
 }
 
+// ---------------------------------------------------------------------------
+// T2 · 设置中心数据层
+// ---------------------------------------------------------------------------
+static void test_settings_roundtrip() {
+    sh::Settings s;
+    s.station = L"STN-07"; s.sound_volume = 55; s.theme = 1;
+    s.language = L"en"; s.update_channel = 1; s.scan_interval_ms = 500;
+    const std::string j = s.to_json();
+    sh::Settings o; std::string err;
+    CHECK(sh::Settings::from_json(j, o, err));
+    CHECK_EQ(o.station, std::wstring(L"STN-07"));
+    CHECK_EQ(o.sound_volume, 55);
+    CHECK_EQ(o.theme, 1);
+    CHECK_EQ(o.language, std::wstring(L"en"));
+    CHECK_EQ(o.update_channel, 1);
+    CHECK_EQ(o.scan_interval_ms, 500);
+}
+
+static void test_settings_defaults_and_corrupt() {
+    sh::Settings o; std::string err;
+    CHECK(!sh::Settings::from_json("{ broken", o, err));       // 解析失败=err 非空
+    CHECK(!err.empty());
+    CHECK(sh::Settings::from_json("{}", o, err));              // 空对象无 v=按默认全收
+    CHECK_EQ(o.station, std::wstring(L"STN-01"));
+    CHECK_EQ(o.sound_volume, 80);
+    CHECK_EQ(o.log_retention_days, 7);
+    CHECK_EQ(o.pass_dwell_ms, 1500);
+    CHECK_EQ(o.report_dir, std::wstring(L"reports"));
+    // 版本不识别
+    CHECK(!sh::Settings::from_json("{\"v\":99}", o, err));
+    // 部分键缺失=保留默认（覆盖一半）
+    sh::Settings h; h.station = L"STN-09";
+    CHECK(sh::Settings::from_json(h.to_json(), o, err));
+    CHECK_EQ(o.station, std::wstring(L"STN-09"));
+    CHECK_EQ(o.theme, 0);
+}
+
+static void test_settings_store_io() {
+    sh::Settings s; s.report_dir = L"usts-t2-verify"; s.theme = 1;
+    std::string err;
+    CHECK(sh::SettingsStore::save(s, err));                    // 建目录+原子保存
+    const std::wstring p = sh::SettingsStore::path();
+    CHECK(!p.empty() && p.find(L"USBDevStudio") != std::wstring::npos);
+    sh::Settings o; bool corrupt = true;
+    CHECK(sh::SettingsStore::load(o, corrupt));
+    CHECK(!corrupt);
+    CHECK_EQ(o.report_dir, std::wstring(L"usts-t2-verify"));
+    CHECK_EQ(o.theme, 1);
+    CHECK(sh::SettingsStore::save(sh::Settings{}, err));       // 还原默认，防污染后续
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -55,6 +108,9 @@ int main() {
 
     RUN_TEST(test_tokens_values);
     RUN_TEST(test_tokens_icon_enum);
+    RUN_TEST(test_settings_roundtrip);
+    RUN_TEST(test_settings_defaults_and_corrupt);
+    RUN_TEST(test_settings_store_io);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);
