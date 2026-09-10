@@ -2,6 +2,7 @@
 // 命令+模糊/工程模型/模板库/日志视图模型/崩溃管理，随任务逐个追加 RUN_TEST）。
 // 运行：apps/win/build/Release/shell_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
+#include "../src/shell/panel_registry.h"
 #include "../src/shell/perspective.h"
 #include "../src/shell/settings.h"
 #include "../src/shell/shell_test.h"
@@ -162,6 +163,46 @@ static void test_layout_store_io() {
     CHECK(sh::LayoutStore::save(sh::LayoutState{}, err));   // 还原默认
 }
 
+// ---------------------------------------------------------------------------
+// T4 · 面板注册表
+// ---------------------------------------------------------------------------
+static void test_panel_registry() {
+    auto& r = sh::PanelRegistry::instance();
+    const size_t before = r.all().size();
+    sh::PanelInfo pi; pi.id = "t.x"; pi.title = L"测试面板"; pi.central = false;
+    pi.supports = {sh::DevKind::Hid, sh::DevKind::Com};
+    std::string err;
+    CHECK(r.register_panel(pi, nullptr, err));
+    CHECK_EQ(r.all().size(), before + 1);
+    CHECK(!r.register_panel(pi, nullptr, err));          // 重复 id 拒绝
+    CHECK(!err.empty() && err.find("t.x") != std::string::npos);
+    const sh::PanelInfo* f = r.find("t.x");
+    CHECK(f != nullptr && f->central == false && f->supports.size() == 2);
+    CHECK(r.find("nope") == nullptr);
+    auto vis = r.for_perspective({"t.x", "missing.id"});
+    CHECK_EQ(vis.size(), 1u);                            // 未注册忽略
+    CHECK_EQ(vis[0].id, std::string("t.x"));
+}
+
+static void test_builtin_panels_and_perspective_align() {
+    auto& r = sh::PanelRegistry::instance();
+    const size_t before = r.all().size();
+    sh::register_builtin_panels(r);                      // 幂等：二调不增
+    sh::register_builtin_panels(r);
+    CHECK_EQ(r.all().size(), before + 12);
+    // 内置 12 项全部在册
+    for (const char* id : {"w1.project_tree", "w1.device_catalog", "w2.descriptor",
+                           "w3.vd", "w3.console", "w3.inspector", "w4.trace",
+                           "w5.explorer", "w5.runner", "w5.pipeline", "w5.history",
+                           "w6.report_list"})
+        CHECK(r.find(id) != nullptr);
+    // 视角默认面板全部已注册（装配闭环：perspective.h 引用 ⊆ 注册表）
+    for (const auto& p : sh::perspectives()) {
+        const auto panels = r.for_perspective(p.default_panels);
+        CHECK_EQ(panels.size(), p.default_panels.size());
+    }
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -175,6 +216,8 @@ int main() {
     RUN_TEST(test_perspective_defs);
     RUN_TEST(test_layout_roundtrip_clamp_corrupt);
     RUN_TEST(test_layout_store_io);
+    RUN_TEST(test_panel_registry);
+    RUN_TEST(test_builtin_panels_and_perspective_align);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);
