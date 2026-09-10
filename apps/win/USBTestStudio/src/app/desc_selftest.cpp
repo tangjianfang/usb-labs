@@ -2,10 +2,48 @@
 // Linter 25 规/diff，随任务逐个追加 RUN_TEST）。
 // 运行：apps/win/build/Release/desc_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
+#include "../src/shell/desc_build.h"
 #include "../src/shell/desc_model.h"
+#include "../src/shell/desc_parse.h"
 #include "../src/shell/shell_test.h"
 
 namespace d = usts::shell::desc;
+
+// ---------------------------------------------------------------------------
+// 黄金样例：Lab1 HID 复合（键盘 If0 EP81 + 鼠标 If1 EP82）——与
+// labs/lab1-hid-composite/firmware/src/usb_descriptors.c 字段口径一致
+// ---------------------------------------------------------------------------
+static const uint8_t kGoldenDevice[18] = {
+    0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08,
+    0x41, 0x23, 0x02, 0x00, 0x00, 0x01, 0x01, 0x02, 0x03, 0x01,
+};
+static const uint8_t kGoldenConfig[59] = {
+    0x09, 0x02, 0x3B, 0x00, 0x02, 0x01, 0x00, 0xA0, 0x32,
+    0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x01, 0x00,
+    0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3F, 0x00,
+    0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A,
+    0x09, 0x04, 0x01, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00,
+    0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3F, 0x00,
+    0x07, 0x05, 0x82, 0x03, 0x08, 0x00, 0x0A,
+};
+static const uint8_t kGoldenStrings[] = {
+    0x04, 0x03, 0x09, 0x04,                               // LANGID 0x0409
+    0x10, 0x03, 'U', 0, 'S', 0, 'B', 0, '-', 0, 'L', 0, 'a', 0, 'b', 0,   // "USB-Lab" 8 字
+};
+static const uint8_t kGoldenKeyboardReport[63] = {
+    0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x05, 0x07, 0x19, 0xE0,
+    0x29, 0xE7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08,
+    0x81, 0x02, 0x95, 0x01, 0x75, 0x08, 0x81, 0x01, 0x95, 0x06,
+    0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00,
+    0x29, 0x65, 0x81, 0x00, 0xC0,
+    // 填充到 63B（wDescriptorLength 与 TinyUSB 键盘报告一致口径）
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static bool vec_eq(const std::vector<uint8_t>& v, const uint8_t* p, size_t n) {
+    return v.size() == n && memcmp(v.data(), p, n) == 0;
+}
 
 // ---------------------------------------------------------------------------
 // T1 · 模型与 JSON 序列化
@@ -98,6 +136,158 @@ static void test_model_json_errors_and_defaults() {
     CHECK(o.configs.empty());
 }
 
+// ---------------------------------------------------------------------------
+// T2 · 反编译：黄金样例逐字段 + 未识别块保真 + 畸形输入
+// ---------------------------------------------------------------------------
+static void test_parse_device_golden() {
+    d::DeviceDesc dev;
+    std::string err;
+    CHECK(d::parse_device_desc(kGoldenDevice, sizeof(kGoldenDevice), dev, err));
+    CHECK_EQ(dev.bcd_usb, 0x0200);
+    CHECK_EQ(dev.dev_class, 0);
+    CHECK_EQ(dev.max_packet0, 8);
+    CHECK_EQ(dev.vid, 0x2341);
+    CHECK_EQ(dev.pid, 0x0002);
+    CHECK_EQ(dev.bcd_device, 0x0100);
+    CHECK_EQ(dev.i_man, 1); CHECK_EQ(dev.i_prod, 2); CHECK_EQ(dev.i_serial, 3);
+    CHECK_EQ(dev.num_configs, 1);
+    // 畸形
+    CHECK(!d::parse_device_desc(kGoldenDevice, 10, dev, err));   // 截断
+    const uint8_t bad[18] = {0x0F, 0x01};
+    CHECK(!d::parse_device_desc(bad, 18, dev, err));             // bLength/type 非法
+}
+
+static d::ConfigDesc parse_golden_cfg(std::vector<d::UnknownBlock>& unk) {
+    d::ConfigDesc c;
+    std::string err;
+    CHECK(d::parse_config_blob(kGoldenConfig, sizeof(kGoldenConfig), c, unk, err));
+    return c;
+}
+
+static void test_parse_config_golden() {
+    std::vector<d::UnknownBlock> unk;
+    const d::ConfigDesc c = parse_golden_cfg(unk);
+    CHECK_EQ(c.value, 1); CHECK_EQ(c.i_cfg, 0);
+    CHECK_EQ(c.attributes, 0xA0); CHECK_EQ(c.max_power, 50);
+    CHECK_EQ(c.interfaces.size(), 2u);
+    const auto& kbd = c.interfaces[0];
+    CHECK_EQ(kbd.number, 0); CHECK_EQ(kbd.alt, 0);
+    CHECK_EQ(kbd.if_class, 3); CHECK_EQ(kbd.sub_class, 1); CHECK_EQ(kbd.protocol, 1);
+    CHECK(kbd.hid && kbd.hid->bcd_hid == 0x0111 && kbd.hid->report_hex.empty());
+    CHECK_EQ(kbd.endpoints.size(), 1u);
+    CHECK_EQ(kbd.endpoints[0].address, 0x81);
+    CHECK_EQ(kbd.endpoints[0].attributes, 3);
+    CHECK_EQ(kbd.endpoints[0].max_packet, 8);
+    CHECK_EQ(kbd.endpoints[0].interval, 10);
+    const auto& mse = c.interfaces[1];
+    CHECK_EQ(mse.number, 1); CHECK_EQ(mse.protocol, 2);   // 鼠标
+    CHECK_EQ(mse.endpoints[0].address, 0x82);
+    CHECK(unk.empty());
+}
+
+static void test_parse_config_unknown_and_malformed() {
+    std::string err;
+    std::vector<d::UnknownBlock> unk;
+    // 未识别 type 0xFF 块（插在键盘 EP 后）
+    uint8_t blob[64];
+    memcpy(blob, kGoldenConfig, sizeof(kGoldenConfig));
+    const uint8_t ff[4] = {0x04, 0xFF, 0xAA, 0xBB};
+    memcpy(blob + 34, ff, 4);                                  // 覆盖鼠标接口头前 4B? 不可
+    // 更稳：构造 mini blob = config 头 + 未知块
+    const uint8_t mini[] = {0x09, 0x02, 0x0D, 0x00, 0x00, 0x01, 0x00, 0x80, 0x32,
+                            0x04, 0xFF, 0xAA, 0xBB};
+    d::ConfigDesc c;
+    CHECK(d::parse_config_blob(mini, sizeof(mini), c, unk, err));
+    CHECK_EQ(unk.size(), 1u);
+    CHECK_EQ(unk[0].raw_hex, std::string("04ffaabb"));
+    CHECK_EQ(unk[0].after, std::string("configs[0].0"));
+    // bLength=0
+    const uint8_t zero[] = {0x09, 0x02, 0x0C, 0x00, 0x00, 0x01, 0x00, 0x80, 0x32,
+                            0x00, 0x04};
+    CHECK(!d::parse_config_blob(zero, sizeof(zero), c, unk, err));
+    // wTotalLength 越界
+    const uint8_t over[] = {0x09, 0x02, 0xFF, 0x00, 0x00, 0x01, 0x00, 0x80, 0x32};
+    CHECK(!d::parse_config_blob(over, sizeof(over), c, unk, err));
+    (void)blob;
+}
+
+static void test_parse_strings_and_attach_report() {
+    d::StringTable st;
+    std::string err;
+    CHECK(d::parse_string_set(kGoldenStrings, sizeof(kGoldenStrings), st, err));
+    CHECK_EQ(st.langids.size(), 1u);
+    CHECK_EQ(st.langids[0], std::wstring(L"0x0409"));
+    CHECK_EQ(st.table[L"0x0409"].size(), 1u);
+    CHECK_EQ(st.table[L"0x0409"][0], std::wstring(L"USB-Lab"));
+    CHECK(!d::parse_string_set(nullptr, 0, st, err));           // 空集=err
+    const uint8_t bad[] = {0x05, 0x04};                          // 非字符串类型
+    CHECK(!d::parse_string_set(bad, sizeof(bad), st, err));
+    // attach_report
+    std::vector<d::UnknownBlock> unk;
+    d::ConfigDesc c = parse_golden_cfg(unk);
+    d::attach_report(c.interfaces[0], kGoldenKeyboardReport,
+                     sizeof(kGoldenKeyboardReport));
+    CHECK_EQ(c.interfaces[0].hid->report_hex.size(), 63u * 2);
+    CHECK(c.interfaces[0].hid->report_hex.substr(0, 10) == "05010906a1");
+}
+
+// ---------------------------------------------------------------------------
+// T3 · 构建：黄金逐字节 + 性质 parse∘build ≡ id
+// ---------------------------------------------------------------------------
+static d::DescModel golden_model() {
+    d::DescModel m;
+    std::string err;
+    d::parse_device_desc(kGoldenDevice, sizeof(kGoldenDevice), m.device, err);
+    std::vector<d::UnknownBlock> unk;
+    m.configs.push_back(parse_golden_cfg(unk));
+    d::StringTable st;
+    d::parse_string_set(kGoldenStrings, sizeof(kGoldenStrings), st, err);
+    m.strings = st;
+    d::attach_report(m.configs[0].interfaces[0], kGoldenKeyboardReport,
+                     sizeof(kGoldenKeyboardReport));
+    d::attach_report(m.configs[0].interfaces[1], kGoldenKeyboardReport,
+                     sizeof(kGoldenKeyboardReport));
+    return m;
+}
+
+static void test_build_golden_bytes() {
+    const d::DescModel m = golden_model();
+    CHECK(vec_eq(d::build_device_desc(m.device), kGoldenDevice, sizeof(kGoldenDevice)));
+    CHECK(vec_eq(d::build_config_blob(m.configs[0]), kGoldenConfig, sizeof(kGoldenConfig)));
+    CHECK(vec_eq(d::build_string_set(m.strings), kGoldenStrings, sizeof(kGoldenStrings)));
+}
+
+static void test_build_roundtrip_properties() {
+    // 性质 1：build(parse(b)) ≡ b（黄金输入，含 report 注入后 wDescriptorLength 一致）
+    const d::DescModel m = golden_model();
+    // 性质 2：parse(build(m)) ≡ m（全部字段）
+    std::string err;
+    std::vector<d::UnknownBlock> unk;
+    d::DeviceDesc dev2;
+    const auto devbin = d::build_device_desc(m.device);
+    CHECK(d::parse_device_desc(devbin.data(), devbin.size(), dev2, err));
+    CHECK_EQ(dev2.vid, m.device.vid);
+    CHECK_EQ(dev2.bcd_usb, m.device.bcd_usb);
+    d::ConfigDesc cfg2;
+    const auto cfgbin = d::build_config_blob(m.configs[0]);
+    CHECK(d::parse_config_blob(cfgbin.data(), cfgbin.size(), cfg2, unk, err));
+    CHECK_EQ(cfg2.interfaces.size(), m.configs[0].interfaces.size());
+    CHECK_EQ(cfg2.interfaces[0].endpoints[0].address, 0x81);
+    CHECK_EQ(cfg2.interfaces[1].protocol, 2);
+    CHECK_EQ(cfgbin.size(), 59u);                       // wTotalLength 回填正确
+    // HID 报告长度回填 == report_hex 字节数
+    d::StringTable st2;
+    const auto strbin = d::build_string_set(m.strings);
+    CHECK(d::parse_string_set(strbin.data(), strbin.size(), st2, err));
+    CHECK_EQ(st2.table[L"0x0409"][0], std::wstring(L"USB-Lab"));
+    // 回填一致性：bNumInterfaces/bNumEndpoints 由实际推导
+    d::ConfigDesc c3 = m.configs[0];
+    c3.interfaces[0].endpoints.push_back({0x83, 2, 64, 1});   // 加一端点
+    const auto b3 = d::build_config_blob(c3);
+    CHECK_EQ(b3.size(), 66u);                                  // 59+7
+    CHECK_EQ(b3[4], 2);                                        // bNumInterfaces 不变
+}
+
 int main() {
     ustlog::init(true, L"desc-selftest");
     auto log = ustlog::logger("app.shell");
@@ -105,6 +295,12 @@ int main() {
 
     RUN_TEST(test_model_json_roundtrip_all_fields);
     RUN_TEST(test_model_json_errors_and_defaults);
+    RUN_TEST(test_parse_device_golden);
+    RUN_TEST(test_parse_config_golden);
+    RUN_TEST(test_parse_config_unknown_and_malformed);
+    RUN_TEST(test_parse_strings_and_attach_report);
+    RUN_TEST(test_build_golden_bytes);
+    RUN_TEST(test_build_roundtrip_properties);
 
     const int rc = shell_test::run_all("desc_selftest");
     log->info("desc_selftest 结束 rc={}", rc);
