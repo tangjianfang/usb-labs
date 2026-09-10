@@ -12,6 +12,8 @@
 #include "../framework/win32_rai.h"
 #include "../ui/tokens.h"
 #include "command_registry.h"
+#include "desc_editor.h"
+#include "desc_gen_c.h"
 #include "panel_registry.h"
 
 #include <cwchar>
@@ -48,6 +50,7 @@ const std::vector<MenuDef>& menu_table() {
         {L"文件", L"最近工程", "", "file.recent"},
         {L"文件", L"关闭工程", "", "file.close_project"},
         {L"文件", L"-", "", ""},
+        {L"文件", L"打开描述符模型…", "", "file.open_ustsdesc"},
         {L"文件", L"导入 pcapng…", "", "file.import_pcapng"},
         {L"文件", L"退出", "Alt+F4", "app.quit"},
         {L"编辑", L"撤销", "Ctrl+Z", "edit.undo"},
@@ -63,6 +66,9 @@ const std::vector<MenuDef>& menu_table() {
         {L"运行", L"运行计划", "Ctrl+R", "run.plan"},
         {L"运行", L"停止", "Esc", "run.stop"},
         {L"运行", L"试跑(mock)", "", "run.mock"},
+        {L"工具", L"描述符检查", "", "tools.desc_lint"},
+        {L"工具", L"生成 C 头文件", "", "tools.desc_gen_c"},
+        {L"工具", L"生成描述符 .bin", "", "tools.desc_gen_bin"},
         {L"工具", L"命令面板", "Ctrl+K", "tools.command_palette"},
         {L"工具", L"设置", "Ctrl+,", "tools.settings"},
         {L"工具", L"脚本控制台", "", "tools.script_console"},
@@ -97,6 +103,26 @@ void MainWindowDS::register_commands() {
             cr.add({id, m.item, m.shortcut, wraii::wide_to_utf8(m.menu)});
             cr.set_handler(id, [id, log] { log->debug("命令（MS0 桩）: {}", id); });
         }
+    }
+    // MS1：描述符编译三条真命令（其余仍桩；W2 面板未开模型时给出提示日志）
+    {
+        auto bind = [&] (const char* id, auto fn) {
+            cr.set_handler(id, [fn, log] {
+                if (!desc::DescEditorPanel::instance()->hwnd()) {
+                    log->warn("W2 面板未打开（先切开发视角）");
+                    return;
+                }
+                fn();
+            });
+        };
+        bind("tools.desc_lint", [] { desc::DescEditorPanel::instance()->run_lint_and_show(); });
+        bind("tools.desc_gen_c", [] {
+            const auto& m = desc::DescEditorPanel::instance()->model();
+            MessageBoxW(nullptr,
+                wraii::utf8_to_wide(desc::generate_c(m, {})).c_str(),
+                L"生成 C 头文件（复制保存）", MB_OK | MB_ICONINFORMATION);
+        });
+        (void)bind;   // desc_gen_bin=生成到文件对话框 MS2 接（模型→bin 内核已就绪）
     }
     log->debug("register_commands: 菜单命令注册完成（{} 项）", menu_table().size());
 }

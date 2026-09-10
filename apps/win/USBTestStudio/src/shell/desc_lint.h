@@ -123,7 +123,6 @@ inline int collection_balance(const std::string& report_hex) {
 inline std::vector<LintHit> DescLinter::run(const DescModel& m) {
     auto log = ustlog::logger("desc.lint");
     std::vector<LintHit> out;
-    const auto& defs = detail::rule_defs();
     const auto D = [&] (const char* id) { return detail::find_def(id); };
 
     // —— 设备级 ——

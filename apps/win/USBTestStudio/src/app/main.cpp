@@ -6,6 +6,8 @@
 #include "app/log.h"
 #include "app/version.h"
 #include "shell/crashdump.h"
+#include "shell/desc_editor.h"
+#include "shell/panel_registry.h"
 #include "shell/main_window_ds.h"
 #include "shell/perspective.h"
 #include "shell/settings.h"
@@ -154,6 +156,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
             }
         }
 
+        shell::PanelRegistry::instance().set_factory(
+            "w2.descriptor", &shell::desc::DescEditorPanel::create_w2);   // MS1：W2 真面板
         shell::MainWindowDS::register_commands();
         shell::MainWindowDS win;
         if (!win.create(hInstance, cfg, layout)) {

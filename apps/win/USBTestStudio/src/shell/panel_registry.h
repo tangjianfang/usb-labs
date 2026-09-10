@@ -36,6 +36,8 @@ public:
     static PanelRegistry& instance();  // 进程级单例
 
     bool register_panel(PanelInfo info, PanelCreateFn fn, std::string& err);
+    // 桩→真实现替换（MS1 起：W2 描述符台等逐个换真；未注册 id=拒绝）
+    bool set_factory(const std::string& id, PanelCreateFn fn);
     const std::vector<std::pair<PanelInfo, PanelCreateFn>>& all() const { return m_panels; }
     const PanelInfo* find(const std::string& id) const;
     // 视角装载用：按 id 列表取已注册面板（未注册忽略，顺序保持入参序）
@@ -80,6 +82,15 @@ inline const PanelInfo* PanelRegistry::find(const std::string& id) const {
     for (const auto& [info, fn] : m_panels)
         if (info.id == id) return &info;
     return nullptr;
+}
+
+inline bool PanelRegistry::set_factory(const std::string& id, PanelCreateFn fn) {
+    auto log = ustlog::logger("shell.panel");
+    for (auto& [info, f] : m_panels) {
+        if (info.id == id) { f = std::move(fn); log->debug("set_factory: {}", id); return true; }
+    }
+    log->warn("set_factory: 未注册 id {}", id);
+    return false;
 }
 
 inline std::vector<PanelInfo> PanelRegistry::for_perspective(

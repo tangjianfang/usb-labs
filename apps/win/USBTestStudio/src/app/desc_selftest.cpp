@@ -4,6 +4,7 @@
 #include "../src/app/log.h"
 #include "../src/shell/desc_build.h"
 #include "../src/shell/desc_diff.h"
+#include "../src/shell/desc_editor.h"
 #include "../src/shell/desc_gen_c.h"
 #include "../src/shell/desc_lint.h"
 #include "../src/shell/desc_model.h"
@@ -535,6 +536,40 @@ static void test_diff_models() {
     CHECK(d4[0].path.find("hid.report") != std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// T7 · W2 编辑器面板（字段注册表 + 隐藏烟测）
+// ---------------------------------------------------------------------------
+static void test_fields_for_types() {
+    CHECK_EQ(d::fields_for(d::kTypeDevice).size(), 12u);
+    CHECK(std::string(d::fields_for(d::kTypeDevice)[0].key) == "bcdUSB");
+    CHECK_EQ(d::fields_for(d::kTypeConfiguration).size(), 4u);
+    CHECK_EQ(d::fields_for(d::kTypeInterface).size(), 6u);
+    CHECK_EQ(d::fields_for(d::kTypeEndpoint).size(), 4u);
+    CHECK_EQ(d::fields_for(d::kTypeHid).size(), 3u);
+    CHECK(d::fields_for(0xFF).empty());   // 未知类型=空（回退 raw 编辑）
+}
+
+static void test_w2_panel_smoke() {
+    HWND host = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 900, 500,
+                                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    CHECK(host != nullptr);
+    HWND panel = d::DescEditorPanel::create_w2(host);
+    CHECK(panel != nullptr);
+    // 黄金模型装载：树节点 = 设备+配置+2接口(各含 HID)+2端点+字符串
+    d::DescEditorPanel::instance()->load_model(golden_model());
+    CHECK_EQ(TreeView_GetCount(d::DescEditorPanel::instance()->tree()), 9u);   // 设备+配置+2×(接口+HID+EP)+字符串
+    // Linter 列表=0 命中（黄金干净）
+    CHECK_EQ(ListBox_GetCount(d::DescEditorPanel::instance()->lint_list()), 0);
+    // 坏模型：1 命中入列表
+    auto bad = golden_model();
+    bad.device.vid = 0;
+    d::DescEditorPanel::instance()->load_model(bad);
+    CHECK_EQ(ListBox_GetCount(d::DescEditorPanel::instance()->lint_list()), 1);
+    CHECK_EQ(d::DescEditorPanel::instance()->model().device.vid, 0);
+    DestroyWindow(panel);
+    DestroyWindow(host);
+}
+
 int main() {
     ustlog::init(true, L"desc-selftest");
     auto log = ustlog::logger("app.shell");
@@ -564,6 +599,8 @@ int main() {
     RUN_TEST(test_lint_rule_triggers);
     RUN_TEST(test_lint_rules_meta_and_file);
     RUN_TEST(test_diff_models);
+    RUN_TEST(test_fields_for_types);
+    RUN_TEST(test_w2_panel_smoke);
 
     const int rc = shell_test::run_all("desc_selftest");
     log->info("desc_selftest 结束 rc={}", rc);

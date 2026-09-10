@@ -52,6 +52,8 @@ jobs:
         run: ./apps/win/build/Release/parser_selftest.exe
       - name: shell 第六靶离线自测（MS0 IDE 壳）
         run: ./apps/win/build/Release/shell_selftest.exe
+      - name: desc 第七靶离线自测（MS1 描述符编译器）
+        run: ./apps/win/build/Release/desc_selftest.exe
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
