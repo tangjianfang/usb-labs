@@ -134,6 +134,8 @@ endif()
 # 命令+模糊匹配/工程模型/模板库/日志视图模型/崩溃管理——纯逻辑+VM 层，逐步追加）
 add_executable(shell_selftest
     src/shell/shell_selftest.cpp
+    src/shell/main_window_ds.cpp
+    src/ui/icons.cpp
     src/framework/win32_rai.cpp
     src/framework/json_mini.cpp
 )

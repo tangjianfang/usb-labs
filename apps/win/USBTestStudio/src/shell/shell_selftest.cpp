@@ -6,12 +6,14 @@
 #include "../src/shell/crashdump.h"
 #include "../src/shell/fuzzy.h"
 #include "../src/shell/logview_model.h"
+#include "../src/shell/main_window_ds.h"
 #include "../src/shell/panel_registry.h"
 #include "../src/shell/perspective.h"
 #include "../src/shell/settings.h"
 #include "../src/shell/shell_test.h"
 #include "../src/shell/templates.h"
 #include "../src/shell/workspace.h"
+#include "../src/ui/icons.h"
 #include "../src/ui/tokens.h"
 
 #include <chrono>
@@ -498,6 +500,84 @@ static void test_crashdump_scan_seen_purge() {
     shell_test::remove_temp_dir(dir);
 }
 
+// ---------------------------------------------------------------------------
+// T10 · DevStudio 主窗口壳（数据表 + 隐藏窗口烟测；不做视觉验证——重大版本前禁用）
+// ---------------------------------------------------------------------------
+static void test_menu_table_matches_design() {
+    const auto& m = sh::menu_table();
+    auto has = [&] (const wchar_t* menu, const wchar_t* item, const char* sc) {
+        for (const auto& d : m)
+            if (wcscmp(d.menu, menu) == 0 && wcscmp(d.item, item) == 0 &&
+                std::string(d.shortcut) == sc)
+                return true;
+        return false;
+    };
+    CHECK(has(L"文件", L"新建工程(从模板…)", ""));
+    CHECK(has(L"文件", L"打开工程…", "Ctrl+O"));
+    CHECK(has(L"视图", L"开发视角", "Ctrl+Alt+1"));
+    CHECK(has(L"视图", L"刷新设备", "F5"));
+    CHECK(has(L"运行", L"运行计划", "Ctrl+R"));
+    CHECK(has(L"工具", L"命令面板", "Ctrl+K"));
+    CHECK(has(L"工具", L"设置", "Ctrl+,"));
+    CHECK(has(L"帮助", L"用户手册", "F1"));
+    CHECK_EQ(sh::status_cells_def().size(), 6u);   // 工程/设备/引擎/通知/日志/时钟
+    // 全表 cmd_id 唯一（分隔线除外）
+    size_t real = 0;
+    for (const auto& d : m) {
+        if (!*d.cmd_id) continue;
+        ++real;
+        size_t dup = 0;
+        for (const auto& e : m)
+            if (*e.cmd_id && std::string(e.cmd_id) == std::string(d.cmd_id)) ++dup;
+        CHECK_EQ(dup, 1u);
+    }
+    CHECK(real >= 20);
+}
+
+static void test_ds_window_smoke() {
+    sh::MainWindowDS::register_commands();
+    auto& cr = sh::CommandRegistry::instance();
+    CHECK(cr.has_handler("view.refresh_devices"));   // 菜单命令全注册
+    CHECK(cr.has_handler("tools.command_palette"));
+    CHECK(cr.invoke("view.refresh_devices"));        // 桩 handler 可执行
+    // 隐藏创建/切换/销毁（无视觉断言）
+    sh::MainWindowDS w;
+    sh::Settings cfg; sh::LayoutState layout;
+    layout.win_w = 1100; layout.win_h = 700;        // ≥最小值
+    CHECK(w.create(GetModuleHandleW(nullptr), cfg, layout));
+    CHECK(w.hwnd() != nullptr);
+    CHECK_EQ(w.current_perspective(), 0);
+    w.switch_perspective(2);
+    CHECK_EQ(w.current_perspective(), 2);
+    w.switch_perspective(9);                        // 越界=不变
+    CHECK_EQ(w.current_perspective(), 2);
+    w.switch_perspective(0);
+    w.show(SW_HIDE);
+    w.request_quit();                               // WM_CLOSE → Destroy → PostQuitMessage
+    MSG msg;
+    int got = 0;
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        if (msg.message == WM_QUIT) { ++got; break; }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    CHECK_EQ(got, 1);                               // 干净退出路径
+}
+
+static void test_icons_draw_smoke() {
+    // 39 枚全部在内存 DC 上绘制不崩（几何字形完整性）
+    HDC screen = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bm = CreateCompatibleBitmap(screen, 32, 32);
+    const auto old = (HBITMAP)SelectObject(mem, bm);
+    for (int i = 0; i <= 38; ++i)
+        CHECK(usts::ui::draw_icon(mem, static_cast<t::Icon>(i), 8, 8, t::kText));
+    SelectObject(mem, old);
+    DeleteObject(bm);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -525,6 +605,9 @@ int main() {
     RUN_TEST(test_logview_ring_and_viewport);
     RUN_TEST(test_logview_perf_100k);
     RUN_TEST(test_crashdump_scan_seen_purge);
+    RUN_TEST(test_menu_table_matches_design);
+    RUN_TEST(test_ds_window_smoke);
+    RUN_TEST(test_icons_draw_smoke);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);
