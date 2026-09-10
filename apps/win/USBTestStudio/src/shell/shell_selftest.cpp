@@ -8,6 +8,7 @@
 #include "../src/shell/perspective.h"
 #include "../src/shell/settings.h"
 #include "../src/shell/shell_test.h"
+#include "../src/shell/templates.h"
 #include "../src/shell/workspace.h"
 #include "../src/ui/tokens.h"
 
@@ -340,6 +341,87 @@ static void test_workspace_store_io() {
     shell_test::remove_temp_dir(dir);
 }
 
+// ---------------------------------------------------------------------------
+// T7 · 工程模板库
+// ---------------------------------------------------------------------------
+static sh::TemplateDef make_mini_template(const std::wstring& root) {
+    // 迷你模板目录树：hardware/BOM.csv · firmware/src/main.c · host/a.py ·
+    // host/autotest.yaml · firmware/build/app.uf2(应跳过) · __pycache__/junk.pyc(应跳过)
+    const std::wstring src = root + L"\\tpl\\labX";
+    CreateDirectoryW((root + L"\\tpl").c_str(), nullptr);
+    CreateDirectoryW(src.c_str(), nullptr);
+    CreateDirectoryW((src + L"\\firmware").c_str(), nullptr);   // 逐级建（CreateDirectoryW 不递归）
+    shell_test::write_file(root + L"\\tpl\\manifest.json",
+        "{\"v\":1,\"templates\":[{\"id\":\"labX\",\"name\":\"LabX 模板\",\"desc\":\"测试\","
+        "\"src\":\"labX\"}]}");
+    CreateDirectoryW((src + L"\\hardware").c_str(), nullptr);
+    CreateDirectoryW((src + L"\\firmware\\src").c_str(), nullptr);
+    CreateDirectoryW((src + L"\\firmware\\build").c_str(), nullptr);
+    CreateDirectoryW((src + L"\\__pycache__").c_str(), nullptr);
+    CreateDirectoryW((src + L"\\host").c_str(), nullptr);
+    shell_test::write_file(src + L"\\hardware\\BOM.csv", "bom");
+    shell_test::write_file(src + L"\\firmware\\src\\main.c", "int main(){}");
+    shell_test::write_file(src + L"\\firmware\\build\\app.uf2", "bin");
+    shell_test::write_file(src + L"\\__pycache__\\junk.pyc", "x");
+    shell_test::write_file(src + L"\\host\\a.py", "print()");
+    shell_test::write_file(src + L"\\host\\autotest.yaml", "name: t");
+    sh::TemplateDef t;
+    t.id = "labX"; t.name = L"LabX 模板"; t.src_dir = src;
+    return t;
+}
+
+static void test_templates_list() {
+    const std::wstring root = shell_test::make_temp_dir();
+    make_mini_template(root);
+    std::string err;
+    const auto ts = sh::Templates::list(root + L"\\tpl\\manifest.json", err);
+    CHECK_EQ(ts.size(), 1u);
+    CHECK_EQ(ts[0].id, std::string("labX"));
+    CHECK_EQ(ts[0].name, std::wstring(L"LabX 模板"));
+    CHECK(!ts[0].src_dir.empty());
+    // 损坏/缺文件
+    CHECK(sh::Templates::list(root + L"\\nope.json", err).empty() && !err.empty());
+    shell_test::write_file(root + L"\\tpl\\manifest.json", "{bad");
+    err.clear();
+    CHECK(sh::Templates::list(root + L"\\tpl\\manifest.json", err).empty() && !err.empty());
+    shell_test::remove_temp_dir(root);
+}
+
+static void test_templates_instantiate() {
+    const std::wstring root = shell_test::make_temp_dir();
+    const sh::TemplateDef t = make_mini_template(root);
+    std::string err;
+    const std::wstring proj = sh::Templates::instantiate(t, root + L"\\tpl",
+                                                         root + L"\\proj", L"我的工程", err);
+    CHECK(!proj.empty()) /* err 已打印于日志 */;
+    CHECK(proj.find(L"我的工程.ustsproj") != std::wstring::npos);
+    // 跳过项未复制
+    CHECK(GetFileAttributesW((root + L"\\proj\\firmware\\build\\app.uf2").c_str())
+          == INVALID_FILE_ATTRIBUTES);
+    CHECK(GetFileAttributesW((root + L"\\proj\\__pycache__").c_str())
+          == INVALID_FILE_ATTRIBUTES);
+    // 复制项在 + 工程文件可解析 + 预填正确
+    CHECK(GetFileAttributesW((root + L"\\proj\\firmware\\src\\main.c").c_str())
+          != INVALID_FILE_ATTRIBUTES);
+    sh::Workspace ws; bool corrupt = true;
+    CHECK(sh::WorkspaceStore::load(proj, ws, corrupt) && !corrupt);
+    CHECK_EQ(ws.name, std::wstring(L"我的工程"));
+    CHECK_EQ(ws.template_id, std::string("labX"));
+    CHECK_EQ(ws.hardware.size(), 1u);          // BOM.csv
+    CHECK_EQ(ws.firmware.size(), 1u);          // main.c（build 跳过）
+    CHECK_EQ(ws.host_app.size(), 2u);          // a.py + autotest.yaml
+    CHECK_EQ(ws.tests.size(), 1u);
+    CHECK_EQ(ws.startup_plan, std::wstring(L"host/autotest.yaml"));
+    // 缺文件检查全绿（引用皆真实）
+    CHECK_EQ(sh::WorkspaceOps::check_missing(ws, root + L"\\proj").size(), ws.tests.size()
+             + ws.host_app.size() + ws.firmware.size() + ws.hardware.size());
+    // 目标非空=拒绝
+    err.clear();
+    CHECK(sh::Templates::instantiate(t, root + L"\\tpl", root + L"\\proj", L"again", err)
+          .empty());
+    shell_test::remove_temp_dir(root);
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -362,6 +444,8 @@ int main() {
     RUN_TEST(test_workspace_refs_missing_and_addremove);
     RUN_TEST(test_workspace_relativize);
     RUN_TEST(test_workspace_store_io);
+    RUN_TEST(test_templates_list);
+    RUN_TEST(test_templates_instantiate);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);

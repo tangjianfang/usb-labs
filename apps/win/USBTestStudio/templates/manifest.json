@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "templates": [
+    { "id": "lab1-hid-composite", "name": "Lab1 HID 复合设备", "desc": "无线键鼠接收器/手柄 OEM——RP2040+TinyUSB 键鼠复合", "src": "lab1-hid-composite" },
+    { "id": "lab2-cdc-dfu", "name": "Lab2 CDC+DFU", "desc": "工业网关调试口/固件升级——STM32F103 CDC+DFU Runtime", "src": "lab2-cdc-dfu" },
+    { "id": "lab3-msc", "name": "Lab3 MSC 大容量存储", "desc": "U 盘/记录仪导出——TinyUSB+SD 卡 BOT/SCSI", "src": "lab3-msc" },
+    { "id": "lab4-uvc-uac", "name": "Lab4 UVC+UAC", "desc": "会议摄像头/麦克风——视频+音频复合（教学级）", "src": "lab4-uvc-uac" },
+    { "id": "lab5-pd-charger", "name": "Lab5 PD 电源", "desc": "充电器/受电设备——FUSB302+PE_Sink 遥测契约", "src": "lab5-pd-charger" },
+    { "id": "lab6-ble-hid-dongle", "name": "Lab6 BLE 双模键鼠", "desc": "双模键鼠+dongle——NCS HOGP+USB HID", "src": "lab6-ble-hid-dongle" },
+    { "id": "lab7-dock-altmode", "name": "Lab7 扩展坞", "desc": "Type-C/USB4 扩展坞——拓扑与 Alt Mode（概要级）", "src": "lab7-dock-altmode" }
+  ]
+}
