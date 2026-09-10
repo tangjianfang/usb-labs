@@ -54,6 +54,8 @@ jobs:
         run: ./apps/win/build/Release/shell_selftest.exe
       - name: desc 第七靶离线自测（MS1 描述符编译器）
         run: ./apps/win/build/Release/desc_selftest.exe
+      - name: vd 第八靶离线自测（MS2 虚拟调试器）
+        run: ./apps/win/build/Release/vd_selftest.exe
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:

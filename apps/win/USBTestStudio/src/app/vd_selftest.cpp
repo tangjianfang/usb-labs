@@ -5,6 +5,7 @@
 #include "../src/shell/shell_test.h"
 #include "../src/shell/vd_core.h"
 #include "../src/shell/vd_script.h"
+#include "../src/shell/vd_editor.h"
 #include "../src/shell/vd_host.h"
 #include "../src/shell/vd_templates.h"
 
@@ -297,6 +298,31 @@ static void test_vd_session_flow() {
     CHECK(!ses.started());
 }
 
+// ---------------------------------------------------------------------------
+// T5 · W3 面板（隐藏烟测）
+// ---------------------------------------------------------------------------
+static void test_w3_panel_smoke() {
+    HWND host = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 900, 500,
+                                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    CHECK(host != nullptr);
+    HWND panel = vd::VdEditorPanel::create_w3(host);
+    CHECK(panel != nullptr);
+    auto* p = vd::VdEditorPanel::instance();
+    p->start(0);                       // hid-keyboard
+    CHECK(p->started());
+    p->drive_enum();                   // 标准枚举 4 事务
+    CHECK(p->event_count() >= 8);      // ≥8 事件（SETUP+DATA ×4）
+    p->inject_quick(vd::Inject::StallNext, 1);
+    uint8_t s[8] = {0x80, 0x06, 0, 1, 0, 0, 18, 0};
+    // 会话经面板无 ctrl 直通——注入已记录（事件流含注入行）
+    CHECK(p->event_count() >= 9);
+    p->do_reset();
+    p->stop();
+    CHECK(!p->started());
+    DestroyWindow(panel);
+    DestroyWindow(host);
+}
+
 int main() {
     ustlog::init(true, L"vd-selftest");
     auto log = ustlog::logger("app.shell");
@@ -309,6 +335,7 @@ int main() {
     RUN_TEST(test_script_roundtrip_and_run);
     RUN_TEST(test_vd_msg_roundtrip);
     RUN_TEST(test_vd_session_flow);
+    RUN_TEST(test_w3_panel_smoke);
     const int rc = shell_test::run_all("vd_selftest");
     log->info("vd_selftest 结束 rc={}", rc);
     return rc;
