@@ -3,7 +3,9 @@
 // 运行：apps/win/build/Release/shell_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
 #include "../src/shell/command_registry.h"
+#include "../src/shell/crashdump.h"
 #include "../src/shell/fuzzy.h"
+#include "../src/shell/logview_model.h"
 #include "../src/shell/panel_registry.h"
 #include "../src/shell/perspective.h"
 #include "../src/shell/settings.h"
@@ -11,6 +13,8 @@
 #include "../src/shell/templates.h"
 #include "../src/shell/workspace.h"
 #include "../src/ui/tokens.h"
+
+#include <chrono>
 
 namespace t = usts::ui::tokens;
 namespace sh = usts::shell;
@@ -422,6 +426,78 @@ static void test_templates_instantiate() {
     shell_test::remove_temp_dir(root);
 }
 
+// ---------------------------------------------------------------------------
+// T8 · 日志视图模型（10 万行性能红线）
+// ---------------------------------------------------------------------------
+static void test_logview_ring_and_viewport() {
+    sh::LogViewModel m(1000);
+    CHECK_EQ(m.cap(), 1000u);
+    for (uint64_t i = 0; i < 1250; ++i) m.append({i, static_cast<int64_t>(i), 'I', 1, "m"});
+    CHECK_EQ(m.size(), 1000u);
+    CHECK_EQ(m.dropped(), 250u);                       // 环形淘汰+计数
+    const auto v0 = m.viewport(0, 3);                  // 最新 3 行正序
+    CHECK_EQ(v0.size(), 3u);
+    CHECK_EQ(v0[0]->seq, 1247u);
+    CHECK_EQ(v0[2]->seq, 1249u);
+    const auto vOld = m.viewport(999, 5);              // 越界裁剪：只剩最旧 1 行
+    CHECK_EQ(vOld.size(), 1u);
+    CHECK_EQ(vOld[0]->seq, 250u);
+    CHECK(m.viewport(1000, 3).empty());                // 完全越界=空
+    CHECK(m.viewport(0, 0).empty());                   // count=0=空
+    m.clear();
+    CHECK_EQ(m.size(), 0u);
+    CHECK_EQ(m.dropped(), 250u);                       // clear 保 dropped
+    CHECK(m.viewport(0, 5).empty());                   // 空模型视口=空
+}
+
+static void test_logview_perf_100k() {
+    sh::LogViewModel m(100000);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (uint64_t i = 0; i < 100000; ++i)
+        m.append({i, static_cast<int64_t>(i), 'D', 7, "0123456789abcdef"});
+    const double ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - t0).count();
+    CHECK_EQ(m.size(), 100000u);
+    CHECK_EQ(m.dropped(), 0u);
+    std::printf("  [perf] 100k append = %.1f ms\n", ms);
+    CHECK(ms < 2000.0);                                // 红线 <2s（机器差异余量）
+    const auto vp = m.viewport(0, 100);                // 尾部视口 O(count)
+    CHECK_EQ(vp.size(), 100u);
+    CHECK_EQ(vp.back()->seq, 99999u);
+}
+
+// ---------------------------------------------------------------------------
+// T9 · 崩溃 minidump 管理（可注入重载）
+// ---------------------------------------------------------------------------
+static void test_crashdump_scan_seen_purge() {
+    const std::wstring dir = shell_test::make_temp_dir();
+    // 3 个 dmp + 1 个无关 txt
+    shell_test::write_file(dir + L"\\crashdump-20260910-010101.dmp", "a");
+    shell_test::write_file(dir + L"\\crashdump-20260910-020202.dmp", "b");
+    shell_test::write_file(dir + L"\\crashdump-20260910-030303.dmp", "c");
+    shell_test::write_file(dir + L"\\note.txt", "x");
+    const auto list = sh::CrashDumpMgr::scan_dir(dir);
+    CHECK_EQ(list.size(), 3u);                          // 只列 .dmp
+    CHECK_EQ(list[0], dir + L"\\crashdump-20260910-010101.dmp");   // 按名=按时间排序
+    CHECK(sh::CrashDumpMgr::scan_dir(dir + L"\\noexist").empty()); // 目录不存在=空
+    // seen 账本往返 + 幂等
+    CHECK(!sh::CrashDumpMgr::is_seen(dir, list[0]));
+    CHECK(sh::CrashDumpMgr::mark_seen(dir, list[0]));
+    CHECK(sh::CrashDumpMgr::mark_seen(dir, list[0]));   // 二次=幂等
+    CHECK(sh::CrashDumpMgr::is_seen(dir, list[0]));
+    CHECK(!sh::CrashDumpMgr::is_seen(dir, list[2]));
+    // purge：新鲜文件不清理（days=1 应清零——文件刚建）
+    CHECK_EQ(sh::CrashDumpMgr::purge_older_than_days(dir, 1), 0u);
+    CHECK_EQ(sh::CrashDumpMgr::scan_dir(dir).size(), 3u);
+    // 真实目录路径形状
+    const std::wstring real = sh::CrashDumpMgr::dir();
+    CHECK(real.find(L"USBDevStudio") != std::wstring::npos
+          && real.find(L"minidump") != std::wstring::npos);
+    std::string err;
+    CHECK(sh::CrashDumpMgr::ensure_dir(err));
+    shell_test::remove_temp_dir(dir);
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -446,6 +522,9 @@ int main() {
     RUN_TEST(test_workspace_store_io);
     RUN_TEST(test_templates_list);
     RUN_TEST(test_templates_instantiate);
+    RUN_TEST(test_logview_ring_and_viewport);
+    RUN_TEST(test_logview_perf_100k);
+    RUN_TEST(test_crashdump_scan_seen_purge);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);

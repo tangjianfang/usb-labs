@@ -148,4 +148,4 @@ target_compile_definitions(shell_selftest PRIVATE
 if(MSVC)
     target_compile_options(shell_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
-target_link_libraries(shell_selftest PRIVATE setupapi shlwapi)
+target_link_libraries(shell_selftest PRIVATE setupapi shlwapi dbghelp)
