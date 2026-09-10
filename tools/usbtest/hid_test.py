@@ -40,18 +40,23 @@ def open_device(dev):
 
 
 def _h(ctx):
-    # 打开态自检不能依赖 d.is_opened()——hidapi 绑定两代 API 不一（原 hid 包有
+    # 打开态自检不能硬依赖 d.is_opened()——hidapi 绑定两代 API 不一（原 hid 包有
     # is_opened，pip hidapi 的 device 无此属性，2026-09-10 真机实测 AttributeError）。
-    # 改为自管 opened 标志：open_path 成功即置位，异常路径清除。
+    # 兼容口径：绑定提供 is_opened 就调用；否则 dev 存在即视为已打开
+    # （引擎与测试注入都只在 open 成功后才把 dev 写入 ctx）。
     d = ctx.get("dev")
-    if d is not None and ctx.get("dev_opened"):
-        return d
+    if d is not None:
+        is_open = getattr(d, "is_opened", None)
+        if callable(is_open):
+            if is_open():
+                return d
+        else:
+            return d
     import hid
     info = hid.enumerate(ctx["device"].get("vid"), ctx["device"].get("pid"))[0]
     d = hid.device()
     d.open_path(info["path"])
     ctx["dev"] = d
-    ctx["dev_opened"] = True
     return d
 
 
