@@ -31,7 +31,14 @@ def open_device(dev):
     import usb.core
     d = usb.core.find(idVendor=dev.get("vid"), idProduct=dev.get("pid"))
     assert d is not None, "未发现 UVC 设备"
-    d.set_configuration()
+    try:
+        d.set_configuration()
+    except usb.core.USBError as e:
+        # Windows 实测（2026-09-10，集成摄像头 13d3:56d5）：设备被系统 UVC 驱动
+        # （usbccgp+usbvideo）持有，set/get_active_configuration 报 ENOENT——
+        # 但配置描述符树仍可读（产测口径=枚举 VC/VS 接口），采帧走 cv2/媒体管线，
+        # 均不依赖 set_configuration。此告警为信息性，不构成失败。
+        devlog.info("set_configuration 失败（%s）——Windows 系统驱动持有口径，继续（描述符树可读）", e)
     devlog.info("UVC 设备已打开: VID=0x%04X PID=0x%04X", dev.get("vid"), dev.get("pid"))
     return d
 
