@@ -2,6 +2,8 @@
 // 命令+模糊/工程模型/模板库/日志视图模型/崩溃管理，随任务逐个追加 RUN_TEST）。
 // 运行：apps/win/build/Release/shell_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
+#include "../src/shell/command_registry.h"
+#include "../src/shell/fuzzy.h"
 #include "../src/shell/panel_registry.h"
 #include "../src/shell/perspective.h"
 #include "../src/shell/settings.h"
@@ -203,6 +205,58 @@ static void test_builtin_panels_and_perspective_align() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T5 · 命令注册表 + 模糊匹配
+// ---------------------------------------------------------------------------
+static void test_fuzzy_match_basics() {
+    const auto empty = sh::fuzzy_match(L"", L"任何");
+    CHECK(empty.matched && empty.score == 0);             // 空查询=全量
+    CHECK(sh::fuzzy_match(L"运行", L"运行计划").matched);   // 中文子序列
+    CHECK(sh::fuzzy_match(L"run", L"Run Plan").matched);   // 大小写不敏感
+    CHECK(!sh::fuzzy_match(L"xyz", L"运行计划").matched);   // 无子序列
+    CHECK(sh::fuzzy_match(L"rpl", L"Run Plan").matched);   // 跨词子序列
+    CHECK(!sh::fuzzy_match(L"planx", L"Run Plan").matched);
+    const auto hits = sh::fuzzy_match(L"rp", L"Run Plan");
+    CHECK(hits.matched && hits.hit.size() == 2 && hits.hit[0] == 0 && hits.hit[1] == 4);
+}
+
+static void test_fuzzy_scoring_order() {
+    const auto cont = sh::fuzzy_match(L"pl", L"Plan");     // 连续（P0 l1）
+    const auto jump = sh::fuzzy_match(L"pn", L"Plan");     // 跳跃
+    CHECK(cont.matched && jump.matched);
+    CHECK(cont.score > jump.score);
+    const auto wstart = sh::fuzzy_match(L"p", L"Run Plan"); // 词首 p
+    const auto mid = sh::fuzzy_match(L"l", L"Run Plan");    // 词中 l
+    CHECK(wstart.matched && mid.matched && wstart.score > mid.score);
+    const auto first = sh::fuzzy_match(L"r", L"Run Plan");  // 首字
+    const auto later = sh::fuzzy_match(L"n", L"Run Plan");  // 词中 n
+    CHECK(first.score > later.score);
+}
+
+static void test_command_registry_and_rank() {
+    auto& cr = sh::CommandRegistry::instance();
+    const auto before = cr.all().size();
+    cr.add({"ms0.t.run", L"运行计划", "Ctrl+R", "运行"});
+    cr.add({"ms0.t.trace", L"打开追踪台", "", "视图"});
+    cr.add({"ms0.t.pl", L"运行 Pipeline", "", "运行"});
+    CHECK_EQ(cr.all().size(), before + 3);
+    cr.add({"ms0.t.run", L"运行计划(覆盖)", "Ctrl+R", "运行"});   // 覆盖不加行
+    CHECK_EQ(cr.all().size(), before + 3);
+    CHECK_EQ(cr.by_category("视图").size(), 1u);
+    static int invoked = 0;
+    cr.set_handler("ms0.t.run", [] { ++invoked; });
+    CHECK(cr.has_handler("ms0.t.run"));
+    CHECK(cr.invoke("ms0.t.run") && invoked == 1);
+    CHECK(!cr.invoke("ms0.t.none"));                       // 未知=失败不抛
+    cr.set_handler("ms0.t.unknown", [] {});                // 未注册 id=拒绝（静默）
+    CHECK(!cr.has_handler("ms0.t.unknown"));
+    // 模糊排序：全命中前缀并列时按注册序，ms0.t.run 先注册居首
+    const auto ranked = sh::fuzzy_rank(L"运行", cr.all());
+    CHECK(!ranked.empty());
+    CHECK_EQ(ranked[0].first.id, std::string("ms0.t.run"));
+    CHECK_EQ(ranked.size(), 2u);                           // trace 不含"运行"
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -218,6 +272,9 @@ int main() {
     RUN_TEST(test_layout_store_io);
     RUN_TEST(test_panel_registry);
     RUN_TEST(test_builtin_panels_and_perspective_align);
+    RUN_TEST(test_fuzzy_match_basics);
+    RUN_TEST(test_fuzzy_scoring_order);
+    RUN_TEST(test_command_registry_and_rank);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);
