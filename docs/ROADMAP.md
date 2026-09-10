@@ -23,6 +23,15 @@
 - ☑ **T9 · UAC 后端实现** ✓ 68d11f3（sounddevice 可选依赖优雅降级；本机真机探针实测 -75.8dBFS 全链派发）：`uac_record_level` 是唯一"仅 mock"处理器，需 sounddevice + OS 音频路由。
 - ☑ **T10 · dock 后端 Windows 路径** ✓ 68d11f3（UsbTreeView 优先/pnputil 回退；实修 zh-CN GBK 解码 bug）：现依赖 Linux lsusb，Windows 接 UsbTreeView CLI。
 
+## P5 · USB DevStudio 全栈工作站（2026-09-11 立账，方案/详设见 apps/）
+
+- ☑ **MS0 · IDE 壳** ✓ 35e3418（推送 origin）：四视角/命令面板/工程模型 .ustsproj/面板注册表/设置+布局持久化/崩溃 minidump/6 靶 512 例全绿/exe 更名 USBDevStudio v0.10.0；实施计划 docs/superpowers/plans/2026-09-11-devstudio-ms0.md T1~T12 全勾
+- ☐ **MS1 · 描述符编译器**（三向：模型⇄二进制⇄C；反编译/Linter 25 条首规/diff）
+- ☐ **MS2 · 虚拟调试器**（usbsim IDE 化：模板/断点五类/错误注入/ustsvd 库）
+- ☐ **MS3 · 测试台+产线归位**（Test Explorer/双后端/Pipeline/EP-4 迁移）
+- ☐ **MS4 · 协议追踪台**（DSL/统计/USBPcap/pcapng）
+- ☐ **MS5+ · 滚动**（W1 诊断/插件 SDK/脚本台/知识服务扩展）
+
 ## P3 · 工程化/商业化最后一公里（提案，需拍板优先级）
 
 - ☑ **T11 · Windows 安装包** ✓ 8a3d261（Inno Setup iss + zip 兜底打包实测产出；版本单源 src/app/version.h 0.9.0）：Inno Setup/MSI、应用图标、版本号方案、发布页。

@@ -33,7 +33,7 @@
 **Interfaces:**
 - Produces: `usts::ui::tokens` 命名空间常量（后续所有 UI 任务引用）；`shell_test.h` 的 `CHECK/CHECK_EQ/RUN_TEST/main` 测试宏（后续所有 shell 任务引用）；CMake 靶 `shell_selftest`。
 
-- [ ] **Step 1: 写 tokens.h**（值=设计附录 E.6 逐项照抄）
+- [x] **Step 1: 写 tokens.h**（值=设计附录 E.6 逐项照抄）
 
 ```cpp
 // tokens.h — 视觉 token 单一事实源（设计附录 E.6；换主题只改这里）
@@ -71,7 +71,7 @@ enum class Icon { Scan, Play, Stop, Pause, Gear, Fullscreen, Lock, Unlock, Warn,
 }
 ```
 
-- [ ] **Step 2: 写 shell_test.h**（微测试架，任意 CWD、退出码 0/1）
+- [x] **Step 2: 写 shell_test.h**（微测试架，任意 CWD、退出码 0/1）
 
 ```cpp
 // shell_test.h — shell 模块自测微框架（与仓库 *_selftest 风格一致，无第三方依赖）
@@ -99,7 +99,7 @@ inline int run_all(const char* title) {
 }
 ```
 
-- [ ] **Step 3: 写 shell_selftest.cpp 空靶 + tokens 自测**
+- [x] **Step 3: 写 shell_selftest.cpp 空靶 + tokens 自测**
 
 ```cpp
 // shell_selftest.cpp — 第六自测靶：MS0 各模块（随任务逐个追加 RUN_TEST）
@@ -119,11 +119,11 @@ int main() {
 }
 ```
 
-- [ ] **Step 4: CMakeLists.txt 加靶**（模式照抄现有 `parser_selftest` 段：源=src/shell/shell_selftest.cpp，链接主工程同等系统库，输出名 shell_selftest，ALL 靶）
+- [x] **Step 4: CMakeLists.txt 加靶**（模式照抄现有 `parser_selftest` 段：源=src/shell/shell_selftest.cpp，链接主工程同等系统库，输出名 shell_selftest，ALL 靶）
 
-- [ ] **Step 5: 构建验证**：`cmake --build apps/win/build --config Release --target shell_selftest` → 运行 exe → `1 例，0 失败 ✓`
+- [x] **Step 5: 构建验证**：`cmake --build apps/win/build --config Release --target shell_selftest` → 运行 exe → `1 例，0 失败 ✓`
 
-- [ ] **Step 6: Commit** `feat(MS0-T1): 视觉 token 单源+shell 自测靶骨架`
+- [x] **Step 6: Commit** `feat(MS0-T1): 视觉 token 单源+shell 自测靶骨架`
 
 ---
 
@@ -165,7 +165,7 @@ public:
 }
 ```
 
-- [ ] **Step 1: 失败测试**（追加到 shell_selftest.cpp）
+- [x] **Step 1: 失败测试**（追加到 shell_selftest.cpp）
 
 ```cpp
 namespace sh = usts::shell;
@@ -197,13 +197,13 @@ static void test_settings_store_io() {  // 临时目录存取（不碰真实 APP
 ```
 `RUN_TEST` 三条；先写 `#include "../src/shell/settings.h"` 让编译失败（红）。
 
-- [ ] **Step 2: 跑红**：`--target shell_selftest` 编译 FAIL（settings.h 不存在）✓ 符合预期
+- [x] **Step 2: 跑红**：`--target shell_selftest` 编译 FAIL（settings.h 不存在）✓ 符合预期
 
-- [ ] **Step 3: 实现 settings.h**（header-only；JSON 写=手工拼串按 key 顺序固定；读=用现有 `framework/json_mini.h` 解析后逐键取、缺键保默认；目录创建/读写经 `framework/win32_rai.h` 文件助手；**每个公开函数入口 log.debug("...") 出口 log.debug/err**，模块名 `shell.settings`；保存写临时文件+rename 原子替换）
+- [x] **Step 3: 实现 settings.h**（header-only；JSON 写=手工拼串按 key 顺序固定；读=用现有 `framework/json_mini.h` 解析后逐键取、缺键保默认；目录创建/读写经 `framework/win32_rai.h` 文件助手；**每个公开函数入口 log.debug("...") 出口 log.debug/err**，模块名 `shell.settings`；保存写临时文件+rename 原子替换）
 
-- [ ] **Step 4: 跑绿**：三例全绿
+- [x] **Step 4: 跑绿**：三例全绿
 
-- [ ] **Step 5: Commit** `feat(MS0-T2): 设置中心数据层——信封 v1/损坏重置/原子保存`
+- [x] **Step 5: Commit** `feat(MS0-T2): 设置中心数据层——信封 v1/损坏重置/原子保存`
 
 ---
 
@@ -244,7 +244,7 @@ public:
 ```
 （默认面板串取设计 §0.2 表：Dev={w1.project_tree,w1.device_catalog,w2.descriptor,w3.vd}；Debug={w3.vd,w3.console,w4.trace,w3.inspector}；Test={w5.explorer,w5.runner,w5.pipeline,w5.history}；Prod={w5.runner,w6.report_list}——MS0 面板 id 以注册表为准，未注册面板加载时忽略。）
 
-- [ ] **Step 1: 失败测试**
+- [x] **Step 1: 失败测试**
 
 ```cpp
 static void test_perspective_defs() {
@@ -268,8 +268,8 @@ static void test_layout_roundtrip_clamp_corrupt() {
 }
 ```
 
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（JSON 读写/目录原子保存同 T2 模式，模块名 `shell.perspective`，逐函数 debug 日志）→ **Step 4: 跑绿**
-- [ ] **Step 5: Commit** `feat(MS0-T3): 视角系统四定义+layout.json 持久化（夹取/损坏重置）`
+- [x] **Step 2: 跑红** → **Step 3: 实现**（JSON 读写/目录原子保存同 T2 模式，模块名 `shell.perspective`，逐函数 debug 日志）→ **Step 4: 跑绿**
+- [x] **Step 5: Commit** `feat(MS0-T3): 视角系统四定义+layout.json 持久化（夹取/损坏重置）`
 
 ---
 
@@ -305,7 +305,7 @@ void register_builtin_panels(PanelRegistry& r);   // MS0 内置桩: w1.project_t
 }
 ```
 
-- [ ] **Step 1: 失败测试**
+- [x] **Step 1: 失败测试**
 
 ```cpp
 static void test_panel_registry() {
@@ -322,7 +322,7 @@ static void test_panel_registry() {
 ```
 （注册表为进程级单例——测试用独立 id 前缀 `t.` 防互扰；`register_builtin_panels` 幂等：重复注册内置 id 直接返回。）
 
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（模块名 `shell.panel`；debug 日志含注册的 id/title；`register_builtin_panels` 各桩 title 中文照设计）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T4): 面板注册表——§10 契约数据层+MS0 内置桩`
+- [x] **Step 2: 跑红** → **Step 3: 实现**（模块名 `shell.panel`；debug 日志含注册的 id/title；`register_builtin_panels` 各桩 title 中文照设计）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T4): 面板注册表——§10 契约数据层+MS0 内置桩`
 
 ---
 
@@ -363,7 +363,7 @@ std::vector<std::pair<Command, int>> fuzzy_rank(const std::wstring& q,
 }
 ```
 
-- [ ] **Step 1: 失败测试**
+- [x] **Step 1: 失败测试**
 
 ```cpp
 static void test_fuzzy_match_basics() {
@@ -394,7 +394,7 @@ static void test_command_registry_and_rank() {
 }
 ```
 
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（fuzzy 在 UTF-16 逐字符；`is_word_start`：前驱非字母数字；两文件均 debug 日志模块 `shell.cmd`；CommandRegistry 单例+互斥锁保护——线程模型按 UI 单线程访问但日志线程会读 all()，加轻锁）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T5): 命令注册表+模糊匹配打分（连续/词首/首字加成）`
+- [x] **Step 2: 跑红** → **Step 3: 实现**（fuzzy 在 UTF-16 逐字符；`is_word_start`：前驱非字母数字；两文件均 debug 日志模块 `shell.cmd`；CommandRegistry 单例+互斥锁保护——线程模型按 UI 单线程访问但日志线程会读 all()，加轻锁）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T5): 命令注册表+模糊匹配打分（连续/词首/首字加成）`
 
 ---
 
@@ -439,7 +439,7 @@ public:
 }
 ```
 
-- [ ] **Step 1: 失败测试**（临时目录用 `framework/win32_rai.h` 文件助手建/清）
+- [x] **Step 1: 失败测试**（临时目录用 `framework/win32_rai.h` 文件助手建/清）
 
 ```cpp
 static void test_workspace_roundtrip() {
@@ -487,7 +487,7 @@ static void test_workspace_store_io() {
 ```
 （`make_temp_dir/write_file/remove_temp_dir` 作为测试助手加进 `shell_test.h`：`GetTempPath`+唯一子目录，`CreateDirectoryW`/`DeleteFileW`/`RemoveDirectoryW` 递归。）
 
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（JSON 组装/解析同 T2 风格；relativize 用 `PathRelativePathToW`，失败回退绝对路径；模块 `shell.workspace`，全 API debug 日志；add/remove/check 打印组名与路径）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T6): 工程模型 .ustsproj——六组引用/缺失检查/相对化/存取`
+- [x] **Step 2: 跑红** → **Step 3: 实现**（JSON 组装/解析同 T2 风格；relativize 用 `PathRelativePathToW`，失败回退绝对路径；模块 `shell.workspace`，全 API debug 日志；add/remove/check 打印组名与路径）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T6): 工程模型 .ustsproj——六组引用/缺失检查/相对化/存取`
 
 ---
 
@@ -519,9 +519,9 @@ public:
 }
 ```
 
-- [ ] **Step 1: 失败测试**（构造迷你模板目录树：`tpl/src/hardware/BOM.csv`+`tpl/src/host/a.py`+`tpl/src/host/autotest.yaml`+`tpl/src/firmware/src/main.c`+`tpl/src/__pycache__/junk.pyc`+manifest.json；断言实例化后：目标树存在、`__pycache__` 未复制、ustsproj 可 load、name=用户名、template_id、tests 组含 autotest.yaml；manifest 缺文件/坏 JSON=err）
+- [x] **Step 1: 失败测试**（构造迷你模板目录树：`tpl/src/hardware/BOM.csv`+`tpl/src/host/a.py`+`tpl/src/host/autotest.yaml`+`tpl/src/firmware/src/main.c`+`tpl/src/__pycache__/junk.pyc`+manifest.json；断言实例化后：目标树存在、`__pycache__` 未复制、ustsproj 可 load、name=用户名、template_id、tests 组含 autotest.yaml；manifest 缺文件/坏 JSON=err）
 
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（递归复制经 `framework/win32_rai.h`；跳过表硬编码；模块 `shell.workspace`，实例化逐目录 debug 日志+结果 info）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T7): 工程模板库——manifest×7 lab/实例化复制+ustsproj 生成`
+- [x] **Step 2: 跑红** → **Step 3: 实现**（递归复制经 `framework/win32_rai.h`；跳过表硬编码；模块 `shell.workspace`，实例化逐目录 debug 日志+结果 info）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T7): 工程模板库——manifest×7 lab/实例化复制+ustsproj 生成`
 
 ---
 
@@ -548,7 +548,7 @@ public:
 }
 ```
 
-- [ ] **Step 1: 失败测试**
+- [x] **Step 1: 失败测试**
 
 ```cpp
 static void test_logview_ring_and_viewport() {
@@ -573,7 +573,7 @@ static void test_logview_perf_100k() {                           // 性能红线
 }
 ```
 
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（`std::deque<LogRow>` 环形，模块 `shell.logview`）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T8): 日志视图模型——100k 有界环形/视口语义/性能红线自测`
+- [x] **Step 2: 跑红** → **Step 3: 实现**（`std::deque<LogRow>` 环形，模块 `shell.logview`）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T8): 日志视图模型——100k 有界环形/视口语义/性能红线自测`
 
 ---
 
@@ -601,8 +601,8 @@ public:
 }
 ```
 
-- [ ] **Step 1: 失败测试**（临时目录注入 3 个假 .dmp+1 个 .txt：scan 只列 .dmp 且排序；mark_seen/is_seen 往返；purge 按 mtime 清老文件保新文件——`utimensat`/`SetFileTime` 改时间；目录不存在 scan 返回空不崩）
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（dump 目录真实路径=LOCALAPPDATA，但 scan/mark/purge 接受注入路径重载以便测试：额外提供 `scan_dir(dir)` 等静态重载；handler 安装只此一处不做单测，注释指向 MSDN MiniDumpWriteDump；模块 `shell.crash`）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T9): minidump 管理——目录/扫描/已读账本/过期清理（可注入测试）`
+- [x] **Step 1: 失败测试**（临时目录注入 3 个假 .dmp+1 个 .txt：scan 只列 .dmp 且排序；mark_seen/is_seen 往返；purge 按 mtime 清老文件保新文件——`utimensat`/`SetFileTime` 改时间；目录不存在 scan 返回空不崩）
+- [x] **Step 2: 跑红** → **Step 3: 实现**（dump 目录真实路径=LOCALAPPDATA，但 scan/mark/purge 接受注入路径重载以便测试：额外提供 `scan_dir(dir)` 等静态重载；handler 安装只此一处不做单测，注释指向 MSDN MiniDumpWriteDump；模块 `shell.crash`）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T9): minidump 管理——目录/扫描/已读账本/过期清理（可注入测试）`
 
 ---
 
@@ -636,7 +636,7 @@ private:
 }
 ```
 
-- [ ] **Step 1: 失败测试（表驱动+隐藏窗口烟测）**
+- [x] **Step 1: 失败测试（表驱动+隐藏窗口烟测）**
 
 ```cpp
 static void test_menu_table_matches_design() {
@@ -661,7 +661,7 @@ static void test_ds_window_smoke() {               // 隐藏窗口烟测(无视�
 ```
 （create() 内部不真正保存 layout.json——保存由析构/显式 flush，烟测后调用 `LayoutStore::save` 复原默认。）
 
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（Win32: RegisterClassExW/三栏 WM_SIZE/自绘工具栏四段钮(Owner-draw 按 token 色)/菜单由 menu_table 生成/WM_DPICHANGED 按比例；**所有消息路径关键分支 log.debug**（模块 `ui.shell`），窗口创建/销毁/视角切换 info；桩面板=中央静态文本列注册表 id）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T10): DevStudio 主窗口壳——菜单表驱动/三栏/视角切换/隐藏烟测`
+- [x] **Step 2: 跑红** → **Step 3: 实现**（Win32: RegisterClassExW/三栏 WM_SIZE/自绘工具栏四段钮(Owner-draw 按 token 色)/菜单由 menu_table 生成/WM_DPICHANGED 按比例；**所有消息路径关键分支 log.debug**（模块 `ui.shell`），窗口创建/销毁/视角切换 info；桩面板=中央静态文本列注册表 id）→ **Step 4: 跑绿** → **Step 5: Commit** `feat(MS0-T10): DevStudio 主窗口壳——菜单表驱动/三栏/视角切换/隐藏烟测`
 
 ---
 
@@ -701,8 +701,8 @@ class ProjectTree { public: bool create(HWND parent); void set_workspace(const W
 }
 ```
 
-- [ ] **Step 1: 失败测试（VM 层）**：PaletteVM——set_query("运行") 首行=运行计划/confirm 返回之/move 循环/空查询列全量前 8/关闭后 visible=false；WizardVM——step 流转 0→1→2、validate 空名 err、目录已存在 err、can_finish；类型过滤 `ms0.` 前缀命令防污染全局注册表
-- [ ] **Step 2: 跑红** → **Step 3: 实现**（三个对话框=DialogBoxIndirectParam 动态模板或 CreateWindow 浮层，控件按 tokens 尺寸；全部动作 debug 日志 `ui.shell`；SettingsDialog 保存经 SettingsStore 并 `log.info`）→ **Step 4: 跑绿（含隐藏窗口烟测三对话框 Create/Destroy）** → **Step 5: Commit** `feat(MS0-T11): 命令面板/新建工程向导/设置对话框/工程树——VM 纯逻辑+薄壳`
+- [x] **Step 1: 失败测试（VM 层）**：PaletteVM——set_query("运行") 首行=运行计划/confirm 返回之/move 循环/空查询列全量前 8/关闭后 visible=false；WizardVM——step 流转 0→1→2、validate 空名 err、目录已存在 err、can_finish；类型过滤 `ms0.` 前缀命令防污染全局注册表
+- [x] **Step 2: 跑红** → **Step 3: 实现**（三个对话框=DialogBoxIndirectParam 动态模板或 CreateWindow 浮层，控件按 tokens 尺寸；全部动作 debug 日志 `ui.shell`；SettingsDialog 保存经 SettingsStore 并 `log.info`）→ **Step 4: 跑绿（含隐藏窗口烟测三对话框 Create/Destroy）** → **Step 5: Commit** `feat(MS0-T11): 命令面板/新建工程向导/设置对话框/工程树——VM 纯逻辑+薄壳`
 
 ---
 
@@ -716,12 +716,12 @@ class ProjectTree { public: bool create(HWND parent); void set_workspace(const W
 - Modify: `packaging/`（T11 的 iss：exe 名/版本源/开始菜单名 "USB DevStudio"；zip 兜底脚本同步）
 - Modify: `apps/win/USBTestStudio/README.md`（产品名/版本/MS0 面貌+第六自测靶说明）、`apps/README.md`（应用矩阵行）
 
-- [ ] **Step 1: main.cpp 集成**（命令行 `USBDevStudio.exe [--console] [--plan …旧旗标保留]`；启动序列 ensure_dir→load settings→load layout(was_corrupt→warn toast)→install crash handler→scan new dumps(>0→MessageBoxW 三选提示数据)→create window；退出 save layout/settings；全序列 info 日志）
-- [ ] **Step 2: 全量构建+全自测**：`cmake --build apps/win/build --config Release` 五靶零告警 → 依次运行 channel/discovery/session/parser/shell 五自测全绿（shell 靶此时应 ≥30 例）
-- [ ] **Step 3: 本地冒烟**：运行 `USBDevStudio.exe` 3 秒自动退出模式（`--smoke` 旗标：创建→切四视角→退出码 0）——无视觉断言
-- [ ] **Step 4: 文档+CI+打包同步**（如上文件清单）
-- [ ] **Step 5: Commit** `feat(MS0): IDE 壳收口——DevStudio 入口/v0.10.0/第六靶/CI+打包同步`
-- [ ] **Step 6: Push** `git push origin main`（远程失败则记录并继续本地提交，收尾重试）
+- [x] **Step 1: main.cpp 集成**（命令行 `USBDevStudio.exe [--console] [--plan …旧旗标保留]`；启动序列 ensure_dir→load settings→load layout(was_corrupt→warn toast)→install crash handler→scan new dumps(>0→MessageBoxW 三选提示数据)→create window；退出 save layout/settings；全序列 info 日志）
+- [x] **Step 2: 全量构建+全自测**：`cmake --build apps/win/build --config Release` 五靶零告警 → 依次运行 channel/discovery/session/parser/shell 五自测全绿（shell 靶此时应 ≥30 例）
+- [x] **Step 3: 本地冒烟**：运行 `USBDevStudio.exe` 3 秒自动退出模式（`--smoke` 旗标：创建→切四视角→退出码 0）——无视觉断言
+- [x] **Step 4: 文档+CI+打包同步**（如上文件清单）
+- [x] **Step 5: Commit** `feat(MS0): IDE 壳收口——DevStudio 入口/v0.10.0/第六靶/CI+打包同步`
+- [x] **Step 6: Push** `git push origin main`（远程失败则记录并继续本地提交，收尾重试）
 
 ---
 
