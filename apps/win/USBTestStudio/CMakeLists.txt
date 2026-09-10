@@ -129,3 +129,23 @@ target_compile_definitions(parser_selftest PRIVATE
 if(MSVC)
     target_compile_options(parser_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
+
+# DevStudio MS0 shell 模块离线自测（控制台；token 单源/设置/视角/面板注册/
+# 命令+模糊匹配/工程模型/模板库/日志视图模型/崩溃管理——纯逻辑+VM 层，逐步追加）
+add_executable(shell_selftest
+    src/shell/shell_selftest.cpp
+    src/framework/win32_rai.cpp
+    src/framework/json_mini.cpp
+)
+target_include_directories(shell_selftest PRIVATE ${UTS_COMMON_INC})
+target_compile_definitions(shell_selftest PRIVATE
+    UNICODE _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES   # wchar 路径：LOCALAPPDATA 含中文用户名时 fopen/窄路径会炸
+)
+if(MSVC)
+    target_compile_options(shell_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()
+target_link_libraries(shell_selftest PRIVATE setupapi)
