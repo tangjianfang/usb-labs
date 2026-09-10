@@ -2,13 +2,16 @@
 // 命令+模糊/工程模型/模板库/日志视图模型/崩溃管理，随任务逐个追加 RUN_TEST）。
 // 运行：apps/win/build/Release/shell_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
+#include "../src/shell/command_palette.h"
 #include "../src/shell/command_registry.h"
 #include "../src/shell/crashdump.h"
 #include "../src/shell/fuzzy.h"
 #include "../src/shell/logview_model.h"
 #include "../src/shell/main_window_ds.h"
+#include "../src/shell/new_project_wizard.h"
 #include "../src/shell/panel_registry.h"
 #include "../src/shell/perspective.h"
+#include "../src/shell/project_tree.h"
 #include "../src/shell/settings.h"
 #include "../src/shell/shell_test.h"
 #include "../src/shell/templates.h"
@@ -578,6 +581,111 @@ static void test_icons_draw_smoke() {
     ReleaseDC(nullptr, screen);
 }
 
+// ---------------------------------------------------------------------------
+// T11 · 命令面板 VM / 新建工程向导 VM（纯逻辑层）
+// ---------------------------------------------------------------------------
+static void test_palette_vm() {
+    auto& cr = sh::CommandRegistry::instance();
+    const size_t before = cr.all().size();
+    cr.add({"ms0.p1", L"面板命令甲", "Ctrl+P", "工具"});
+    cr.add({"ms0.p2", L"面板命令乙", "", "工具"});
+    sh::PaletteVM vm;
+    vm.open();
+    CHECK(vm.visible);
+    CHECK_EQ(vm.rows.size(), (std::min)(size_t{8}, before + 2));   // 空查询前 8
+    CHECK_EQ(vm.selected, 0);
+    vm.type(L'甲');                       // 过滤到 1 行
+    CHECK_EQ(vm.rows.size(), 1u);
+    CHECK_EQ(vm.rows[0].first.id, std::string("ms0.p1"));
+    const sh::Command* c = vm.confirm();
+    CHECK(c != nullptr && c->id == "ms0.p1");
+    vm.backspace();
+    vm.backspace();                       // 退成空串（backspace 空查询=保持空）
+    vm.set_query(L"");
+    CHECK_EQ(vm.rows.size(), (std::min)(size_t{8}, before + 2));
+    vm.move(1); vm.move(-1);              // 循环移动
+    CHECK_EQ(vm.selected, 0);
+    vm.close();
+    CHECK(!vm.visible);
+    CHECK(vm.confirm() == nullptr);       // 关闭后确认=nullptr
+    vm.set_query(L"乙");
+    CHECK_EQ(vm.rows.size(), 1u);
+    vm.move(5);                           // 循环取模不越界
+    CHECK(vm.selected == 0 || vm.selected == -0);
+}
+
+static void test_wizard_vm() {
+    sh::WizardVM w;
+    w.templates.push_back({"labX", L"LabX", L"", L""});
+    // step0：未选模板
+    CHECK(!w.next());
+    CHECK(w.validate() == std::wstring(L"请选择一个模板"));
+    w.tpl_id = "labX";
+    CHECK(w.next());
+    // step1：名称/目录校验
+    CHECK_EQ(w.step, 1);
+    CHECK(!w.next());
+    CHECK(w.validate() == std::wstring(L"工程名不能为空"));
+    w.name = L"我的工程";
+    CHECK(!w.next());
+    CHECK(w.validate() == std::wstring(L"目标目录不能为空"));
+    const std::wstring dir = shell_test::make_temp_dir();
+    shell_test::write_file(dir + L"\\占用.txt", "x");
+    w.dir = dir;
+    CHECK(!w.next());
+    CHECK(w.validate() == std::wstring(L"目标目录已存在且非空"));
+    shell_test::remove_temp_dir(dir);
+    CreateDirectoryW(dir.c_str(), nullptr);           // 空目录=允许
+    CHECK(w.next());
+    CHECK(w.can_finish());
+    // back 流转
+    CHECK(w.back());
+    CHECK_EQ(w.step, 1);
+    CHECK(w.next());
+    // finish：模板在列表 → 实例化成功（目录空）
+    std::string err;
+    // 模板 src 放 dir\src，目标改 dir\proj（独立子目录——src 不能在 dest 里）
+    const std::wstring src = dir + L"\\src";
+    CreateDirectoryW(src.c_str(), nullptr);
+    w.templates[0].src_dir = src;
+    w.dir = dir + L"\\proj";
+    const std::wstring proj = w.finish(dir, err);
+    CHECK(!proj.empty());
+    CHECK(proj.find(L"我的工程.ustsproj") != std::wstring::npos);
+    shell_test::remove_temp_dir(dir);
+    // 模板不在列表=finish 失败
+    sh::WizardVM w2;
+    w2.step = 2; w2.tpl_id = "nope"; w2.name = L"n"; w2.dir = dir;
+    CHECK(w2.finish(dir, err).empty());
+}
+
+static void test_palette_window_smoke() {
+    sh::CommandPaletteWnd wnd;
+    CHECK(sh::CommandPaletteWnd::register_class(GetModuleHandleW(nullptr)));
+    CHECK(wnd.create(GetModuleHandleW(nullptr), nullptr));
+    CHECK(wnd.hwnd() != nullptr);
+    DestroyWindow(wnd.hwnd());
+}
+
+static void test_project_tree_smoke() {
+    // 宿主静态窗 + 树创建 + 装载（含缺失 ⚠ 分支）
+    HWND host = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 200, 300,
+                                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    CHECK(host != nullptr);
+    sh::ProjectTree tree;
+    CHECK(tree.create(host, 0, 0, 200, 300));
+    sh::Workspace ws;
+    ws.name = L"t";
+    ws.hardware.push_back({L"有.txt"});
+    ws.hardware.push_back({L"缺.txt"});
+    const std::wstring dir = shell_test::make_temp_dir();
+    shell_test::write_file(dir + L"\\有.txt", "x");
+    tree.set_workspace(ws, dir);
+    CHECK_EQ(TreeView_GetCount(tree.hwnd()), 8u);   // 6 组根（含空组）+ 2 引用
+    DestroyWindow(host);
+    shell_test::remove_temp_dir(dir);
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -608,6 +716,10 @@ int main() {
     RUN_TEST(test_menu_table_matches_design);
     RUN_TEST(test_ds_window_smoke);
     RUN_TEST(test_icons_draw_smoke);
+    RUN_TEST(test_palette_vm);
+    RUN_TEST(test_wizard_vm);
+    RUN_TEST(test_palette_window_smoke);
+    RUN_TEST(test_project_tree_smoke);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);

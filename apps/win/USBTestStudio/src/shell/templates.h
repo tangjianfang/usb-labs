@@ -180,8 +180,14 @@ inline std::wstring Templates::instantiate(const TemplateDef& t,
     } else {
         WIN32_FIND_DATAW fd;
         const HANDLE h = ::FindFirstFileW((dest_dir + L"\\*").c_str(), &fd);
-        const bool nonempty = h != INVALID_HANDLE_VALUE;
-        if (h != INVALID_HANDLE_VALUE) ::FindClose(h);
+        bool nonempty = false;   // 空目录 FindFirstFile 仍成功（. / .. 项）
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (::wcscmp(fd.cFileName, L".") != 0 &&
+                    ::wcscmp(fd.cFileName, L"..") != 0) { nonempty = true; break; }
+            } while (::FindNextFileW(h, &fd));
+            ::FindClose(h);
+        }
         if (nonempty) {
             err = "目标目录非空，拒绝实例化";
             log->warn("instantiate: {}", err);
