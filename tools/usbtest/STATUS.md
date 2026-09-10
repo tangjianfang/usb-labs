@@ -7,20 +7,20 @@
 | 后端 | 处理器 | 代码 | mock | 真实硬件 | 依赖工装/前置 |
 |---|---|---|---|---|---|
 | mock | 全部 27 类 | ✅ | ✅ CI 常绿 | —（即本职） | 无 |
-| hid | enumerate | ✅ | ✅ | ❌ 待真机 | 无 |
-| hid | hid_polling_rate | ✅ | ✅ | ❌ | 移动机构或固件自测上报模式 |
-| hid | hid_output_write | ✅ | ✅ | ❌ | 光敏/目检确认 LED |
+| hid | enumerate | ✅ | ✅ | ✅ 真机（2026-09-10：Razer 1532:00B2，9 集合） | 无 |
+| hid | hid_polling_rate | ✅ | ✅ | ◐ 真机链路通（静置 3s 实测 0Hz——需动鼠标/工装触发上报，工具行为如实） | 移动机构或固件自测上报模式 |
+| hid | hid_output_write | ✅ | ✅ | ◐ 真机（Razer 拒通用输出报告 written=-1——消费鼠非产测 DUT；对自研固件 LED 有效） | 光敏/目检确认 LED |
 | hid | hid_report_loopback | ✅ | ✅ | ❌ | 环回工装（固件自环测试模式更佳，见 Lab1 TODO） |
 | cdc | serial_loopback | ✅ | ✅ | ❌ | TX-RX 短接治具 |
 | cdc | line_coding | ✅ | ✅ | ❌ | 无（pyusb 控制传输） |
 | cdc | dfu_verify | ✅ | ✅ | ❌ | dfu-util + 设备 DFU 分区 |
 | msc | msc_inquiry / msc_capacity | ✅ | ✅ | ❌ | 无 |
 | msc | msc_write_verify | ✅ | ✅ | ❌ | **DESTRUCTIVE**：仅空白盘/授权测试 |
-| uvc | uvc_formats / uvc_capture_frames | ✅ | ✅ | ❌ | opencv-python |
+| uvc | uvc_formats / uvc_capture_frames | ✅ | ✅ | ✅ 真机（集成摄像头 13d3:56D5：14 UVC 接口；640x480×5 帧实拍出图） | opencv-python + libusb（libusb-package 提供 DLL，PATH 挂载） |
 | pd | pd_attach / pd_negotiate / measure_voltage | ✅ | ✅ | ❌ | **前置：Lab5 固件实现遥测输出契约**（见下） |
 | ble | ble_scan_connect / gatt_discover / notify | ✅ | ✅ | ❌ | 屏蔽箱 + 适配器 |
-| uac | uac_record_level | ✅ 代码完整（sounddevice 可选依赖，未装时优雅失败） | ✅ | ❌ 待工装 | OS 音频路由（DUT 麦克风→工控机默认输入设备）+ pip install sounddevice |
-| dock | dock_topology / hub_port_cycle | ✅ | ✅ | ❌ | Linux: lsusb -t；Windows: UsbTreeView.exe CLI（/c /f 文本导出，参数以 UsbTreeView 官方文档为准）优先 → pnputil /enum-devices（Win10 2004+ 内置，zh-CN GBK 输出已兼容）回退。pnputil 枚举路径已在 zh-CN Windows 开发机实测（主机侧枚举非 dock DUT 联调） |
+| uac | uac_record_level | ✅ 代码完整（sounddevice 可选依赖，未装时优雅失败） | ✅ | ◐ 主机侧✅（2026-09-10 板载 Realtek 麦 -58.2 dBFS 实录）；USB UAC DUT 待工装 | OS 音频路由（DUT 麦克风→工控机默认输入设备）+ pip install sounddevice |
+| dock | dock_topology / hub_port_cycle | ✅ | ✅ | ◐ 主机侧✅（2026-09-10 实跑 dock_topology PASS，7 HS 端口）；dock DUT 待接入 | Linux: lsusb -t；Windows: UsbTreeView.exe CLI（/c /f 文本导出，参数以 UsbTreeView 官方文档为准）优先 → pnputil /enum-devices（Win10 2004+ 内置，zh-CN GBK 输出已兼容）回退。pnputil 枚举路径已在 zh-CN Windows 开发机实测（主机侧枚举非 dock DUT 联调） |
 
 ## 二、PD 固件↔测试工具契约（待闭合的口子）
 
