@@ -1,4 +1,14 @@
-# USBTestStudio — USB 产线测试上位机（Windows）
+# USB DevStudio — USB 全栈工作站（Windows）
+
+> **MS0（v0.10.0）起默认形态 = DevStudio 工作站壳**：四视角（开发/调试/测试/产线）+
+> 命令注册表 + 工程模型(.ustsproj) + 面板注册表 + 设置/布局持久化 + 崩溃 minidump。
+> 总纲 `apps/方案-USBDevStudio工作站.md` · 控件级详设 `apps/设计-USBDevStudio六工作台.md`
+> · 实施计划 `docs/superpowers/plans/2026-09-11-devstudio-ms0.md`。
+> 启动模式：默认 DevStudio · `--console` EP-4 控制台 · `--legacy` 旧产测 · `--smoke` 烟测。
+> 第六自测靶 `shell_selftest.exe`（29 例：tokens/设置/视角/面板注册/命令模糊/工程模型/
+> 模板/日志 10 万行 16ms/崩溃管理/菜单表/窗口烟测）。
+
+## 旧产测模式（--legacy）原 README 以下内容照旧适用
 
 USB-Labs 的 Windows 原生上位机：**测试计划(JSON) → 步骤执行（枚举/描述符/HID 回报率/串口环回/MSC 只读校验/PD 遥测）→ 判定 → JSON 报告 + MES 退出码**。
 

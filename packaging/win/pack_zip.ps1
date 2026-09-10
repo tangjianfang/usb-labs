@@ -11,7 +11,7 @@ if (-not $BuildDir) {
     $BuildDir = Join-Path $PSScriptRoot "..\..\apps\win\build\Release"
 }
 
-$exe = Join-Path $BuildDir "USBTestStudio.exe"
+$exe = Join-Path $BuildDir "USBDevStudio.exe"
 if (-not (Test-Path $exe)) {
     throw "未找到 $exe —— 先执行 cmake --build apps/win/build --config Release"
 }
@@ -27,8 +27,9 @@ USBTestStudio $Version
 USB 工程师通信控制台 + 产测工具（EP-4）。
 
 用法：
-  USBTestStudio.exe              产测模式（默认读同目录 plan.json）
-  USBTestStudio.exe --console   工程师通信控制台（设备发现/会话收发/解析）
+  USBDevStudio.exe               DevStudio 工作站（默认；四视角 IDE 壳）
+  USBDevStudio.exe --console    工程师通信控制台（设备发现/会话收发/解析）
+  USBDevStudio.exe --legacy     旧产测模式（读同目录 plan.json）
 
 日志：%LOCALAPPDATA%\USBTestStudio\logs\（滚动 5MB x 3）
 "@

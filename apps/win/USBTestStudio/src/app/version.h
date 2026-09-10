@@ -3,10 +3,10 @@
 #pragma once
 
 #define UTS_VERSION_MAJOR 0
-#define UTS_VERSION_MINOR 9
+#define UTS_VERSION_MINOR 10
 #define UTS_VERSION_PATCH 0
 
-#define UTS_VERSION_U8 "0.9.0"
+#define UTS_VERSION_U8 "0.10.0"
 
 // 窄字符字面量场景（utf-8 编译单元）直用 UTS_VERSION_U8；
 // 宽字符场景用 UTS_VERSION_W

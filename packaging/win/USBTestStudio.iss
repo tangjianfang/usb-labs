@@ -4,10 +4,10 @@
 ; 前置：先 cmake --build apps/win/build --config Release 产出主程序。
 ; 产物：packaging\win\Output\USBTestStudio-<版本>-setup.exe
 
-#define MyAppName "USBTestStudio"
-#define MyAppVersion "0.9.0"
+#define MyAppName "USB DevStudio"
+#define MyAppVersion "0.10.0"
 #define MyAppPublisher "USB-Labs"
-#define MyAppExeName "USBTestStudio.exe"
+#define MyAppExeName "USBDevStudio.exe"
 #define BuildDir "..\..\apps\win\build\Release"
 
 [Setup]

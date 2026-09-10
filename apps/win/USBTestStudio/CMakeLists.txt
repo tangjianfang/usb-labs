@@ -13,6 +13,8 @@ set(UTS_COMMON_INC
 
 add_executable(USBTestStudio WIN32
     src/app/main.cpp
+    src/shell/main_window_ds.cpp
+    src/ui/icons.cpp
     src/framework/win32_rai.cpp
     src/framework/json_mini.cpp
     src/usb/device_enumerator.cpp
@@ -42,7 +44,8 @@ if(MSVC)
     target_compile_options(USBTestStudio PRIVATE /W4 /utf-8 /permissive-)
 endif()
 
-target_link_libraries(USBTestStudio PRIVATE setupapi cfgmgr32 hid winusb comctl32 comdlg32 shell32)
+target_link_libraries(USBTestStudio PRIVATE setupapi cfgmgr32 hid winusb comctl32 comdlg32 shell32 shlwapi dbghelp)
+set_target_properties(USBTestStudio PROPERTIES OUTPUT_NAME "USBDevStudio")   # MS0 起产品名 USB DevStudio
 
 # app.manifest：CMake 路径下通过 /MANIFESTINPUT 注入（PerMonitorV2 DPI + Common Controls v6）
 if(MSVC)

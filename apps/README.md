@@ -7,7 +7,7 @@
 
 | 应用 | 平台栈 | 目录 | 状态 |
 |---|---|---|---|
-| USBTestStudio (Windows) | Win32 + C++20 + VS2022（零第三方依赖） | [win/USBTestStudio/](win/USBTestStudio/) | 源码完成，待真机联调 |
+| USB DevStudio (Windows) | Win32 + C++20 + VS2022（零第三方依赖）· MS0 起六工作台壳 | [win/USBTestStudio/](win/USBTestStudio/) | 源码完成，待真机联调 |
 | USBTestStudio (macOS) | Swift 5.9 + AppKit + IOKit | [mac/USBTestStudio/](mac/USBTestStudio/) | 源码完成，待真机联调 |
 | 参考实现（跨平台） | Python（tools/usbtest） | [../tools/usbtest/](../tools/usbtest/) | 已验证（mock 全绿） |
 

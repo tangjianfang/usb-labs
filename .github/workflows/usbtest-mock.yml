@@ -50,9 +50,11 @@ jobs:
         run: ./apps/win/build/Release/session_selftest.exe
       - name: 解析面板离线自测（含 S6 PD 遥测）
         run: ./apps/win/build/Release/parser_selftest.exe
+      - name: shell 第六靶离线自测（MS0 IDE 壳）
+        run: ./apps/win/build/Release/shell_selftest.exe
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: USBTestStudio-win-x64
-          path: apps/win/build/Release/USBTestStudio.exe
+          name: USBDevStudio-win-x64
+          path: apps/win/build/Release/USBDevStudio.exe
           retention-days: 7
