@@ -1,0 +1,156 @@
+[2026-09-11 01:12:43.563][info][app.shell][T18208] desc_selftest 启动（MS1 第七靶）
+{
+  "v": 1,
+  "rules": [
+    {
+      "id": "D01",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.1",
+      "fix": "块长度与规范长度一致由构建器保证；手改 JSON 后重新生成"
+    },
+    {
+      "id": "D02",
+      "severity": 0,
+      "clause": "USB 2.0 §9.5",
+      "fix": "使用规范描述符类型"
+    },
+    {
+      "id": "D03",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.1",
+      "fix": "bcdUSB 取 0x0110/0x0200/0x0210"
+    },
+    {
+      "id": "D04",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.1",
+      "fix": "bMaxPacketSize0 取 8/16/32/64"
+    },
+    {
+      "id": "D05",
+      "severity": 0,
+      "clause": "USB-IF",
+      "fix": "idVendor 使用正式申请 VID（0 非法）"
+    },
+    {
+      "id": "D06",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.3",
+      "fix": "wTotalLength 由构建器按实际回填"
+    },
+    {
+      "id": "D07",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.3",
+      "fix": "bNumInterfaces 与接口列表一致"
+    },
+    {
+      "id": "D08",
+      "severity": 1,
+      "clause": "USB 2.0 §9.6.3",
+      "fix": "bConfigurationValue ≥ 1（0 保留）"
+    },
+    {
+      "id": "D09",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.3",
+      "fix": "bmAttributes bit7 必须置 1（保留位）"
+    },
+    {
+      "id": "D10",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.3",
+      "fix": "bMaxPower ≤ 250（500mA/2mA 单位）"
+    },
+    {
+      "id": "D11",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.5",
+      "fix": "接口号从 0 连续编号"
+    },
+    {
+      "id": "D12",
+      "severity": 1,
+      "clause": "USB 2.0 §9.6.5",
+      "fix": "同一接口的 AlternateSetting 组从 0 起"
+    },
+    {
+      "id": "D13",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.5",
+      "fix": "bNumEndpoints 与端点列表一致（构建器回填）"
+    },
+    {
+      "id": "D14",
+      "severity": 1,
+      "clause": "USB-IF class codes",
+      "fix": "bInterfaceClass 使用已分配类码（0x00/0x01/0x02/0x03/0x08/0x0A/0x0E/0xEF/0xFF）"
+    },
+    {
+      "id": "D15",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.6",
+      "fix": "端点号 1..15，EP0 不得出现在配置内"
+    },
+    {
+      "id": "D16",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.6",
+      "fix": "同一接口内端点地址不重复"
+    },
+    {
+      "id": "D17",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.6",
+      "fix": "bmAttributes 高 2 位保留为 0，传输类型 ∈ 控制/同步/批量/中断"
+    },
+    {
+      "id": "D18",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.6",
+      "fix": "全速：批量/中断 ≤64B，同步 ≤1023B"
+    },
+    {
+      "id": "D19",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.6",
+      "fix": "配置内不得定义控制端点（EP0 唯一）"
+    },
+    {
+      "id": "D20",
+      "severity": 1,
+      "clause": "USB 2.0 §9.6.6",
+      "fix": "中断 bInterval 1..255；全速同步 1..16"
+    },
+    {
+      "id": "D21",
+      "severity": 0,
+      "clause": "HID 1.11 §7.1",
+      "fix": "wDescriptorLength 与报告描述符字节数一致（构建器回填）"
+    },
+    {
+      "id": "D22",
+      "severity": 0,
+      "clause": "HID 1.11 §6.2.2",
+      "fix": "报告描述符 COLLECTION/END_COLLECTION 配对且 Item 栈平衡"
+    },
+    {
+      "id": "D23",
+      "severity": 1,
+      "clause": "USB 2.0 §9.6.7",
+      "fix": "iXxx 字符串索引不得超过字符串表长度"
+    },
+    {
+      "id": "D24",
+      "severity": 0,
+      "clause": "USB 2.0 §9.6.7",
+      "fix": "LANGID 表非空（字符串索引 0 语义）"
+    },
+    {
+      "id": "D25",
+      "severity": 1,
+      "clause": "USB 2.0 IAD ECN",
+      "fix": "IAD first_if+count 不越过接口总数且组内连续"
+    }
+  ]
+}

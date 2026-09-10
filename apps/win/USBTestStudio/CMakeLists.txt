@@ -173,4 +173,4 @@ target_compile_definitions(desc_selftest PRIVATE
 if(MSVC)
     target_compile_options(desc_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
-target_link_libraries(desc_selftest PRIVATE setupapi shlwapi dbghelp comctl32)
+target_link_libraries(desc_selftest PRIVATE setupapi shlwapi dbghelp comctl32 shell32)
