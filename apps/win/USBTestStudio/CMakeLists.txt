@@ -174,3 +174,19 @@ if(MSVC)
     target_compile_options(desc_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
 target_link_libraries(desc_selftest PRIVATE setupapi shlwapi dbghelp comctl32 shell32)
+
+# DevStudio MS2 虚拟调试器离线自测（控制台；vd_core 枚举/断点/注入/模板/脚本/协议）
+add_executable(vd_selftest
+    src/app/vd_selftest.cpp
+    src/framework/win32_rai.cpp
+    src/framework/json_mini.cpp
+)
+target_include_directories(vd_selftest PRIVATE ${UTS_COMMON_INC})
+target_compile_definitions(vd_selftest PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES
+)
+if(MSVC)
+    target_compile_options(vd_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()
+target_link_libraries(vd_selftest PRIVATE setupapi shlwapi dbghelp comctl32)
