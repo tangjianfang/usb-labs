@@ -2,13 +2,18 @@
 #include "../src/app/log.h"
 #include "../src/shell/shell_test.h"
 #include "../src/shell/te_editor.h"
+#include "../src/shell/kb_service.h"
+#include "../src/shell/plugin_abi.h"
 #include "../src/shell/te_model.h"
+#include "../src/shell/w1_diag.h"
 #include "../src/shell/te_runner.h"
 #include "../src/shell/pipeline.h"
 #include "../src/shell/vd_templates.h"
 
 namespace te = usts::shell::te;
 namespace vd = usts::shell::vd;
+namespace w1 = usts::shell::w1;
+namespace plugin = usts::shell::plugin;
 
 // ---------------------------------------------------------------------------
 // T1 · 计划模型
@@ -177,6 +182,120 @@ static void test_te_panels_smoke() {
     DestroyWindow(host);
 }
 
+// ---------------------------------------------------------------------------
+// T10-T12 · MS5 切片：W1 诊断 / 插件 ABI / 脚本记录 / 知识服务 / MES / 权限
+// ---------------------------------------------------------------------------
+static void test_w1_diag() {
+    // ① 能力档案
+    w1::DeviceSummary d;
+    d.interfaces = {L"HID 键盘(boot)", L"HID 鼠标(boot)"};
+    d.endpoints = {L"EP1 IN 中断 8B/10ms"};
+    const std::string j = w1::capability_json(d);
+    CHECK(j.find("HID 键盘") != std::string::npos);
+    CHECK(j.find("0x2341") != std::string::npos);
+    // ② ghost 扫描
+    std::vector<w1::DeviceRow> devs = {
+        {L"USB\\VID_2341&PID_0002&1", true, L"键鼠"},
+        {L"USB\\VID_DEAD&PID_BEEF&2", false, L"旧设备"},
+        {L"USB\\VID_0781&PID_5583&3", true, L"U 盘"},
+    };
+    const auto ghosts = w1::scan_ghosts(devs);
+    CHECK_EQ(ghosts.size(), 1u);
+    CHECK_EQ(ghosts[0].name, std::wstring(L"旧设备"));
+    CHECK(w1::scan_ghosts({}).empty());
+    // ③ WinUSB 向导 VM
+    w1::WinUsbWizard wz;
+    CHECK(wz.validate() == std::wstring(L"请选择设备"));
+    CHECK(!wz.next());
+    wz.vidpid = L"USB\\VID_2341&PID_0002";
+    CHECK(wz.next());                                    // 生成兼容 ID
+    CHECK_EQ(wz.compat_id, std::wstring(L"USB\\VID_2341&PID_0002&REV_0100"));
+    CHECK(wz.next());                                    // 到绑定校验
+    CHECK(!wz.next());                                   // 末步
+    CHECK(wz.back());
+    // 非法形状
+    w1::WinUsbWizard bad;
+    bad.vidpid = L"HTREE\\ROOT";
+    CHECK_EQ(w1::WinUsbWizard::make_compat_id(bad.vidpid), std::wstring(L""));
+}
+
+static void test_plugin_manifest() {
+    auto& reg = plugin::PluginRegistry::instance();
+    const size_t before = reg.all().size();
+    const char* good =
+        "{\"id\":\"com.lab.msc-bench\",\"version\":\"1.0.0\",\"extensions\":["
+        "{\"kind\":\"step\",\"entry\":\"msc_bench_step\",\"title\":\"MSC 基准\"},"
+        "{\"kind\":\"panel\",\"entry\":\"msc_bench_panel\"}]}";
+    std::string err;
+    CHECK(reg.load_manifest(good, err));
+    CHECK_EQ(reg.all().size(), before + 2);
+    CHECK(reg.find("com.lab.msc-bench") != nullptr);
+    CHECK_EQ(reg.count_of_kind("step"), 1u + 0);          // 本靶内首个 step
+    CHECK_EQ(reg.count_of_kind("panel"), 1u);
+    // 重复 id 拒绝
+    CHECK(!reg.load_manifest(good, err));
+    // 非法 kind=整包拒绝（原子性）
+    const char* bad_kind =
+        "{\"id\":\"com.lab.x\",\"version\":\"1.0\",\"extensions\":["
+        "{\"kind\":\"stepper\",\"entry\":\"x\"}]}";
+    CHECK(!reg.load_manifest(bad_kind, err));
+    CHECK_EQ(reg.all().size(), before + 2);               // 未混入半包
+    // 缺 entry 拒绝 / 缺 extensions 拒绝 / 坏 JSON 拒绝
+    CHECK(!reg.load_manifest("{\"id\":\"a\",\"version\":\"1\",\"extensions\":[{\"kind\":\"panel\"}]}", err));
+    CHECK(!reg.load_manifest("{\"id\":\"a\",\"version\":\"1\"}", err));
+    CHECK(!reg.load_manifest("{bad", err));
+}
+
+static void test_script_recorder() {
+    using namespace usts::shell;
+    auto& cr = CommandRegistry::instance();
+    cr.add({"ms5.s1", L"甲命令", "", "测试"});
+    cr.add({"ms5.s2", L"乙命令", "", "测试"});
+    cr.set_handler("ms5.s1", [] {});
+    CommandRecorder rec;
+    rec.record("ms5.s1");
+    rec.record("ms5.s2");          // 未挂 handler
+    rec.record("nope");            // 未注册
+    const std::string j = rec.to_jsonl();
+    CHECK_EQ(rec.ids().size(), 3u);
+    CommandRecorder back;
+    std::string err;
+    CHECK(back.load_jsonl(j, err));
+    CHECK_EQ(back.ids().size(), 3u);
+    CHECK_EQ(back.ids()[0], std::string("ms5.s1"));
+    int invoked = -1;
+    CHECK_EQ(back.replay(&invoked), 1u);   // 仅 ms5.s1 有 handler
+    CHECK_EQ(invoked, 1);
+    CHECK(!back.load_jsonl("{\"x\":1}", err));
+    // 空串=零命令可加载
+    CHECK(back.load_jsonl("", err) && back.ids().empty());
+}
+
+static void test_kb_mes_role() {
+    using namespace usts::shell;
+    // kb：25 规同源 + 8 字段
+    CHECK_EQ(kb_entry_count(), 33u);
+    const auto* d15 = kb_lookup("D15");
+    CHECK(d15 && d15->clause.find("9.6.6") != std::string::npos);
+    const auto* mp = kb_lookup("wMaxPacketSize");
+    CHECK(mp && mp->clause.find("9.6.6") != std::string::npos);
+    CHECK(kb_lookup("nope") == nullptr);
+    // MES 模板
+    const auto mes = mes_command("reports/r.json", "STN-01", "SN1", 0);
+    CHECK(mes.find("Invoke-RestMethod") != std::string::npos);
+    CHECK(mes.find("PASS") != std::string::npos);
+    CHECK(mes.find("STN-01") != std::string::npos);
+    CHECK(mes_command("r", "s", "n", 1).find("FAIL") != std::string::npos);
+    // 权限
+    CHECK(role_allows(Role::Admin, "file.open_project"));
+    CHECK(role_allows(Role::Engineer, "tools.desc_lint"));
+    CHECK(!role_allows(Role::Engineer, "file.open_project"));
+    CHECK(role_allows(Role::Operator, "run.plan"));
+    CHECK(role_allows(Role::Operator, "view.perspective.dev"));
+    CHECK(!role_allows(Role::Operator, "tools.desc_gen_c"));
+    CHECK(!role_allows(Role::Operator, "file.quit"));
+}
+
 int main() {
     ustlog::init(true, L"te-selftest");
     auto log = ustlog::logger("app.shell");
@@ -185,6 +304,10 @@ int main() {
     RUN_TEST(test_run_mock_and_virtual);
     RUN_TEST(test_pipeline_run_and_roundtrip);
     RUN_TEST(test_te_panels_smoke);
+    RUN_TEST(test_w1_diag);
+    RUN_TEST(test_plugin_manifest);
+    RUN_TEST(test_script_recorder);
+    RUN_TEST(test_kb_mes_role);
     const int rc = shell_test::run_all("te_selftest");
     log->info("te_selftest 结束 rc={}", rc);
     return rc;

@@ -29,6 +29,8 @@ public:
     static std::vector<LintHit> run(const DescModel& m);
     static std::string rules_meta_json();   // 25 条元信息（rules/desc_rules.json 同源）
     static size_t rule_count();
+    struct RuleMeta { std::string id; int severity; std::string clause; std::string fix; };
+    static std::vector<RuleMeta> rule_metas();   // kb_service 桥接用（同源防漂移）
 };
 
 // ---------------------------------------------------------------------------
@@ -280,6 +282,13 @@ inline std::vector<LintHit> DescLinter::run(const DescModel& m) {
 }
 
 inline size_t DescLinter::rule_count() { return detail::rule_defs().size(); }
+
+inline std::vector<DescLinter::RuleMeta> DescLinter::rule_metas() {
+    std::vector<RuleMeta> out;
+    for (const auto& d : detail::rule_defs())
+        out.push_back({d.id, d.severity, d.clause, d.fix});
+    return out;
+}
 
 inline std::string DescLinter::rules_meta_json() {
     wraii::json_writer w;

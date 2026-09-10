@@ -30,7 +30,8 @@
 - ☑ **MS2 · 虚拟调试器** ✓（C++ vd_core 架构诚实账落账/枚举字节级=MS1 产物/断点五类/注入五型/ustssim 脚本/ustsvd 进程内协议/W3 面板真替换/第八靶 9 例/v0.12.0——证据见 git log feat(MS2)）
 - ☑ **MS3 · 测试台+产线归位** ✓（计划模型/双后端 mock+virtual(vd 真跑)/Pipeline abort·continue/执行视图+报告中心面板真替换/第九靶 4 例/v0.13.0；EP-4 完整面板化与 YAML 解析归滚动——合并计划诚实账）
 - ☑ **MS4 · 协议追踪台** ✓（时间线模型+vd 事件转换/过滤 DSL 两级优先级递归下降/统计 NAK 率字节合计/按序 diff/W4 面板真替换/第十靶 4 例/v0.14.0；USBPcap 与 pcapng 外联源归滚动）
-- ☐ **MS5+ · 滚动**（W1 诊断/插件 SDK/脚本台/知识服务扩展）
+- ☑ **MS5 · 核心切片** ✓（W1 诊断三件套(能力档案/ghost/WinUSB 向导 VM)/插件 ABI 四扩展点 manifest(非法 kind 整包拒绝)/脚本命令记录回放/知识服务 kb(25 规同源桥接+8 字段=33 条)/MES 上报模板/三角色权限/v0.15.0）
+- ☐ **MS5+ · 滚动长尾**（明示排队）：真机后端 GUI 统一 · EP-4 面板化 · ustsvd hidapi 形状 DLL+命名管道 · pcapng/USBPcap 源 · DLL 加载插件运行时 · REPL 解释器 · i18n/自动更新/无障碍 · MSC 基准/全盘 · UVC 丢帧/UAC 扫频 · GATT 树/BLE-DFU/PD 嗅探 · 批产/重试/MES 网络调用 · Python usbsim 进程桥接 · macOS 平移
 
 ## P3 · 工程化/商业化最后一公里（提案，需拍板优先级）
 
