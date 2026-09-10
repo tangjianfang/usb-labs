@@ -2,6 +2,7 @@
 // 命令+模糊/工程模型/模板库/日志视图模型/崩溃管理，随任务逐个追加 RUN_TEST）。
 // 运行：apps/win/build/Release/shell_selftest.exe（任意 CWD）。
 #include "../src/app/log.h"
+#include "../src/shell/perspective.h"
 #include "../src/shell/settings.h"
 #include "../src/shell/shell_test.h"
 #include "../src/ui/tokens.h"
@@ -101,6 +102,66 @@ static void test_settings_store_io() {
     CHECK(sh::SettingsStore::save(sh::Settings{}, err));       // 还原默认，防污染后续
 }
 
+// ---------------------------------------------------------------------------
+// T3 · 视角系统与布局持久化
+// ---------------------------------------------------------------------------
+static void test_perspective_defs() {
+    const auto& ps = sh::perspectives();
+    CHECK_EQ(ps.size(), 4u);
+    CHECK_EQ(std::wstring(ps[0].name), std::wstring(L"开发"));
+    CHECK_EQ(std::wstring(ps[1].name), std::wstring(L"调试"));
+    CHECK_EQ(std::wstring(ps[2].name), std::wstring(L"测试"));
+    CHECK_EQ(std::wstring(ps[3].name), std::wstring(L"产线"));
+    CHECK(std::string(ps[0].accelerator) == "Ctrl+Alt+1");
+    CHECK(std::string(ps[1].accelerator) == "Ctrl+Alt+2");
+    CHECK(std::string(ps[2].accelerator) == "Ctrl+Alt+3");
+    CHECK(std::string(ps[3].accelerator) == "Ctrl+Alt+4");
+    CHECK(sh::find_perspective(sh::PerspectiveId::Debug) == &ps[1]);
+    CHECK(sh::find_perspective(static_cast<sh::PerspectiveId>(9)) == nullptr);
+    CHECK(!ps[0].default_panels.empty() && ps[0].default_panels[0] == "w1.project_tree");
+    CHECK_EQ(ps[3].default_panels.size(), 2u);   // 产线视角两面板
+}
+
+static void test_layout_roundtrip_clamp_corrupt() {
+    sh::LayoutState l;
+    l.current = sh::PerspectiveId::Test;
+    l.left_w = 9999; l.right_w = 100;            // 双越界
+    l.pinned_panels = {"w5.explorer", ""};       // 含脏空串
+    l.clamp();
+    CHECK_EQ(l.left_w, 420);
+    CHECK_EQ(l.right_w, 220);
+    l.pinned_panels.erase(
+        std::remove(l.pinned_panels.begin(), l.pinned_panels.end(), std::string()),
+        l.pinned_panels.end());
+    CHECK_EQ(l.pinned_panels.size(), 1u);
+    const std::string j = l.to_json();
+    sh::LayoutState o; std::string err;
+    CHECK(sh::LayoutState::from_json(j, o, err));
+    CHECK(o.current == sh::PerspectiveId::Test);
+    CHECK_EQ(o.left_w, 420);
+    CHECK_EQ(o.pinned_panels.size(), 1u);
+    CHECK_EQ(o.pinned_panels[0], std::string("w5.explorer"));
+    CHECK(!sh::LayoutState::from_json("nope", o, err));           // 解析失败
+    CHECK(!sh::LayoutState::from_json("{\"v\":2}", o, err));      // 版本不识别
+    CHECK(!sh::LayoutState::from_json("{\"current\":7}", o, err)); // current 越界
+    // 下界夹取 + 窗口最小值
+    sh::LayoutState low; low.left_w = 50; low.win_w = 100; low.clamp();
+    CHECK_EQ(low.left_w, 180);
+    CHECK_EQ(low.win_w, t::kWinMinW);
+}
+
+static void test_layout_store_io() {
+    sh::LayoutState l; l.left_w = 333; l.context_visible = false;
+    std::string err;
+    CHECK(sh::LayoutStore::save(l, err));
+    sh::LayoutState o; bool corrupt = true;
+    CHECK(sh::LayoutStore::load(o, corrupt));
+    CHECK(!corrupt);
+    CHECK_EQ(o.left_w, 333);
+    CHECK(!o.context_visible);
+    CHECK(sh::LayoutStore::save(sh::LayoutState{}, err));   // 还原默认
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -111,6 +172,9 @@ int main() {
     RUN_TEST(test_settings_roundtrip);
     RUN_TEST(test_settings_defaults_and_corrupt);
     RUN_TEST(test_settings_store_io);
+    RUN_TEST(test_perspective_defs);
+    RUN_TEST(test_layout_roundtrip_clamp_corrupt);
+    RUN_TEST(test_layout_store_io);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);
