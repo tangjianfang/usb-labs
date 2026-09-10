@@ -8,6 +8,7 @@
 #include "../src/shell/perspective.h"
 #include "../src/shell/settings.h"
 #include "../src/shell/shell_test.h"
+#include "../src/shell/workspace.h"
 #include "../src/ui/tokens.h"
 
 namespace t = usts::ui::tokens;
@@ -257,6 +258,88 @@ static void test_command_registry_and_rank() {
     CHECK_EQ(ranked.size(), 2u);                           // trace 不含"运行"
 }
 
+// ---------------------------------------------------------------------------
+// T6 · 工程模型 .ustsproj
+// ---------------------------------------------------------------------------
+static void test_workspace_roundtrip() {
+    sh::Workspace w;
+    w.name = L"lab1 无线键鼠";
+    w.template_id = "lab1-hid-composite";
+    w.firmware.push_back({L"firmware/src/main.c", sh::RefKind::Text});
+    w.firmware.push_back({L"firmware/build/app.uf2", sh::RefKind::Binary});
+    w.tests.push_back({L"host/autotest.yaml", sh::RefKind::Plan});
+    w.startup_plan = L"host/autotest.yaml";
+    const std::string j = w.to_json();
+    sh::Workspace o; std::string err;
+    CHECK(sh::Workspace::from_json(j, o, err));
+    CHECK_EQ(o.name, std::wstring(L"lab1 无线键鼠"));
+    CHECK_EQ(o.template_id, std::string("lab1-hid-composite"));
+    CHECK_EQ(o.firmware.size(), 2u);
+    CHECK_EQ(o.firmware[0].kind, sh::RefKind::Text);
+    CHECK_EQ(o.firmware[1].kind, sh::RefKind::Binary);
+    CHECK_EQ(o.tests[0].kind, sh::RefKind::Plan);
+    CHECK_EQ(o.startup_plan, std::wstring(L"host/autotest.yaml"));
+    CHECK_EQ(o.station, std::wstring(L"STN-01"));      // 缺省产线节
+    // 必填与版本
+    CHECK(!sh::Workspace::from_json("{}", o, err));     // 缺 name
+    CHECK(!sh::Workspace::from_json("{\"name\":\"x\",\"v\":2}", o, err));
+    // 未知 kind=回退 text（前向兼容）
+    CHECK(sh::Workspace::from_json("{\"name\":\"x\",\"groups\":{\"firmware\":"
+           "[{\"path\":\"a\",\"kind\":\"future-kind\"}]}}", o, err));
+    CHECK_EQ(o.firmware[0].kind, sh::RefKind::Text);
+}
+
+static void test_workspace_refs_missing_and_addremove() {
+    sh::Workspace w; std::string err;
+    CHECK(sh::WorkspaceOps::add_ref(w, L"hardware", {L"a.txt"}, err));
+    CHECK(!sh::WorkspaceOps::add_ref(w, L"hardware", {L"a.txt"}, err));   // 重复拒绝
+    CHECK(!err.empty());
+    err.clear();
+    CHECK(!sh::WorkspaceOps::add_ref(w, L"badgroup", {L"z"}, err));       // 未知组
+    CHECK_EQ(sh::WorkspaceOps::all_refs(w).size(), 1u);
+    // check_missing：a.txt 在、b.txt 缺
+    const std::wstring dir = shell_test::make_temp_dir();
+    shell_test::write_file(dir + L"\\a.txt", "x");
+    w.hardware.push_back({L"b.txt"});
+    const auto miss = sh::WorkspaceOps::check_missing(w, dir);
+    CHECK_EQ(miss.size(), 2u);
+    CHECK(miss[0].second && !miss[1].second);
+    // remove：命中删除 / 未命中失败；不删物理文件
+    CHECK(sh::WorkspaceOps::remove_ref(w, L"a.txt", err));
+    CHECK(!sh::WorkspaceOps::remove_ref(w, L"zz.txt", err));
+    CHECK(sh::WorkspaceOps::all_refs(w).size() == 1);
+    const DWORD attr = ::GetFileAttributesW((dir + L"\\a.txt").c_str());
+    CHECK(attr != INVALID_FILE_ATTRIBUTES);           // 文件仍在
+    shell_test::remove_temp_dir(dir);
+}
+
+static void test_workspace_relativize() {
+    // 同盘→相对，'/' 分隔（持久化约定）
+    CHECK_EQ(sh::WorkspaceOps::relativize(L"C:\\p", L"C:\\p\\sub\\f.txt"),
+             std::wstring(L"sub/f.txt"));
+    CHECK_EQ(sh::WorkspaceOps::relativize(L"C:\\p", L"C:\\p\\f.txt"),
+             std::wstring(L"f.txt"));
+    // 跨盘→原样绝对
+    CHECK_EQ(sh::WorkspaceOps::relativize(L"C:\\p", L"D:\\q\\f.txt"),
+             std::wstring(L"D:\\q\\f.txt"));
+}
+
+static void test_workspace_store_io() {
+    const std::wstring dir = shell_test::make_temp_dir();
+    const std::wstring p = dir + L"\\x.ustsproj";
+    sh::Workspace w; w.name = L"测试工程"; w.tests.push_back({L"t.yaml", sh::RefKind::Plan});
+    std::string err; bool corrupt = false;
+    CHECK(sh::WorkspaceStore::save(w, p, err));
+    sh::Workspace o;
+    CHECK(sh::WorkspaceStore::load(p, o, corrupt) && !corrupt);
+    CHECK_EQ(o.name, std::wstring(L"测试工程"));
+    CHECK_EQ(o.tests.size(), 1u);
+    shell_test::write_file(p, "corrupt");               // 覆写损坏
+    CHECK(sh::WorkspaceStore::load(p, o, corrupt) && corrupt);
+    CHECK_EQ(o.name, std::wstring(L""));                // 损坏=默认
+    shell_test::remove_temp_dir(dir);
+}
+
 int main() {
     ustlog::init(true, L"shell-selftest");   // selftest 靶接 stdout（README §7）
     auto log = ustlog::logger("app.shell");
@@ -275,6 +358,10 @@ int main() {
     RUN_TEST(test_fuzzy_match_basics);
     RUN_TEST(test_fuzzy_scoring_order);
     RUN_TEST(test_command_registry_and_rank);
+    RUN_TEST(test_workspace_roundtrip);
+    RUN_TEST(test_workspace_refs_missing_and_addremove);
+    RUN_TEST(test_workspace_relativize);
+    RUN_TEST(test_workspace_store_io);
 
     const int rc = shell_test::run_all("shell_selftest");
     log->info("shell_selftest 结束 rc={}", rc);
