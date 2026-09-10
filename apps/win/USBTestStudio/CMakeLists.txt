@@ -206,3 +206,19 @@ if(MSVC)
     target_compile_options(te_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
 target_link_libraries(te_selftest PRIVATE setupapi shlwapi dbghelp comctl32)
+
+# DevStudio MS4 追踪台离线自测（时间线/过滤 DSL/统计/diff/面板）
+add_executable(trace_selftest
+    src/app/trace_selftest.cpp
+    src/framework/win32_rai.cpp
+    src/framework/json_mini.cpp
+)
+target_include_directories(trace_selftest PRIVATE ${UTS_COMMON_INC})
+target_compile_definitions(trace_selftest PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES
+)
+if(MSVC)
+    target_compile_options(trace_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()
+target_link_libraries(trace_selftest PRIVATE setupapi shlwapi dbghelp comctl32)
