@@ -154,3 +154,23 @@ if(MSVC)
     target_compile_options(shell_selftest PRIVATE /W4 /utf-8 /permissive-)
 endif()
 target_link_libraries(shell_selftest PRIVATE setupapi shlwapi dbghelp comctl32)
+
+# DevStudio MS1 描述符编译器离线自测（控制台；模型 round-trip/解析/构建/C 生成/
+# Linter 25 规/diff——纯逻辑，逐步追加）
+add_executable(desc_selftest
+    src/app/desc_selftest.cpp
+    src/framework/win32_rai.cpp
+    src/framework/json_mini.cpp
+)
+target_include_directories(desc_selftest PRIVATE ${UTS_COMMON_INC})
+target_compile_definitions(desc_selftest PRIVATE
+    UNICODE _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
+    SPDLOG_WCHAR_FILENAMES
+)
+if(MSVC)
+    target_compile_options(desc_selftest PRIVATE /W4 /utf-8 /permissive-)
+endif()
+target_link_libraries(desc_selftest PRIVATE setupapi shlwapi dbghelp comctl32)
